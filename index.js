@@ -162,25 +162,64 @@ function bindUIEvents(settings) {
     });
 }
 
+// ==================== 获取当前角色卡数据 ====================
+function getCurrentCharacterData() {
+    const ctx = SillyTavern.getContext();
+    const charId = ctx.characterId;
+
+    // 方式1：通过 characterId 直接取
+    if (charId !== undefined && charId !== null) {
+        const char = ctx.characters[charId];
+        if (char?.data) {
+            return { charId, char };
+        }
+    }
+
+    // 方式2：尝试从 chat metadata 反推
+    if (ctx.chat?.length > 0) {
+        // 有聊天记录说明一定有角色加载过
+        for (let i = 0; i < ctx.characters.length; i++) {
+            const c = ctx.characters[i];
+            if (c?.data && c.chat === ctx.chatId) {
+                return { charId: i, char: c };
+            }
+        }
+    }
+
+    return null;
+}
+
+// ==================== 检测 AI API 是否可用 ====================
+function checkAIAvailable() {
+    const ctx = SillyTavern.getContext();
+    const api = ctx.mainApi;
+    if (!api || api === 'undefined') {
+        return { available: false, reason: '未配置 AI API。请先在 SillyTavern 的 API 设置中配置你的 AI 连接（如 OpenAI、Claude 等），TokenSlim 会复用该连接进行压缩。' };
+    }
+    return { available: true, api };
+}
+
 // ==================== 生成 FCC ====================
 async function handleGenerateFCC(settings) {
+    // 先检查 AI API
+    const aiCheck = checkAIAvailable();
+    if (!aiCheck.available) {
+        toastr.error(aiCheck.reason, 'TokenSlim - 需要配置AI');
+        return;
+    }
+
     const btn = $('#tokenslim_generate_btn');
     const originalBtnText = btn.html();
     btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 生成中...').prop('disabled', true);
 
     try {
-        const ctx = SillyTavern.getContext();
-        const charId = ctx.characterId;
-        if (charId === undefined || charId === null) {
-            toastr.error('请先加载角色卡', 'TokenSlim');
+        const charData = getCurrentCharacterData();
+        if (!charData) {
+            toastr.error('请先加载角色卡（打开一个角色的聊天）', 'TokenSlim');
             return;
         }
 
-        const char = ctx.characters[charId];
-        if (!char || !char.data) {
-            toastr.error('请先加载角色卡', 'TokenSlim');
-            return;
-        }
+        const { charId, char } = charData;
 
         const description = char.data.description || '';
         const personality = char.data.personality || '';
@@ -394,11 +433,9 @@ function updateCompressionResult(originalTokens, compressedTokens, ratio, selfCh
 // ==================== FCC 加载/保存/清除 ====================
 function loadFCC() {
     try {
-        const ctx = SillyTavern.getContext();
-        const charId = ctx.characterId;
-        if (charId === undefined || charId === null) return null;
-        const char = ctx.characters[charId];
-        return char?.data?.extensions?.tokenslim?.fcc || null;
+        const charData = getCurrentCharacterData();
+        if (!charData) return null;
+        return charData.char?.data?.extensions?.tokenslim?.fcc || null;
     } catch (err) {
         console.warn('TokenSlim: FCC 加载失败', err);
         return null;
@@ -407,13 +444,13 @@ function loadFCC() {
 
 async function saveFCC(fcc) {
     try {
-        const ctx = SillyTavern.getContext();
-        const charId = ctx.characterId;
-        if (charId === undefined || charId === null) {
+        const charData = getCurrentCharacterData();
+        if (!charData) {
             console.warn('TokenSlim: 无法保存 FCC，角色卡未加载');
             return;
         }
-        await ctx.writeExtensionField(charId, 'tokenslim', { fcc: fcc });
+        const ctx = SillyTavern.getContext();
+        await ctx.writeExtensionField(charData.charId, 'tokenslim', { fcc: fcc });
         console.log('TokenSlim: FCC 已保存');
     } catch (err) {
         console.error('TokenSlim: FCC 保存失败', err);
@@ -422,10 +459,9 @@ async function saveFCC(fcc) {
 
 function clearFCC() {
     try {
-        const ctx = SillyTavern.getContext();
-        const charId = ctx.characterId;
-        if (charId === undefined || charId === null) return;
-        const char = ctx.characters[charId];
+        const charData = getCurrentCharacterData();
+        if (!charData) return;
+        const char = charData.char;
         if (char?.data?.extensions?.tokenslim) {
             delete char.data.extensions.tokenslim.fcc;
             saveMetadataDebounced();
@@ -630,9 +666,9 @@ function detectCacheKillers() {
         }
 
         // 规则3：绿灯条目
-        if (charId !== undefined && charId !== null) {
-            const char = ctx.characters[charId];
-            const book = char?.data?.character_book?.entries;
+        const charData = getCurrentCharacterData();
+        if (charData) {
+            const book = charData.char?.data?.character_book?.entries;
             if (book) {
                 const greenAtBeforeAfter = Object.values(book).filter(e =>
                     e.enabled && !e.constant && (e.position === 1 || e.position === 2)
