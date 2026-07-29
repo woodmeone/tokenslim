@@ -1,93 +1,107 @@
-<div id="tokenslim_container" class="tokenslim-container">
-    <h4>🔧 TokenSlim — 冻结压缩典籍（FCC）</h4>
-
-    <!-- 状态行 -->
-    <div class="tokenslim-setting-row">
-        <span id="tokenslim_status">⬜ FCC 未生成</span>
-        <span id="tokenslim_fcc_meta" style="display:none"></span>
-    </div>
-
-    <div class="tokenslim-divider"></div>
-
-    <!-- 基本设置 -->
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_enabled">启用 TokenSlim</label>
-        <input type="checkbox" id="tokenslim_enabled" />
-    </div>
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_format">格式</label>
-        <select id="tokenslim_format">
-            <option value="plist">PList（默认推荐）</option>
-            <option value="concise">精简列表</option>
-            <option value="wplus">W+ 简化</option>
-            <option value="wplusplus">W++ 原始</option>
-        </select>
-    </div>
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_token_target">Token 目标</label>
-        <input type="number" id="tokenslim_token_target" min="50" max="500" value="150" />
-    </div>
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_archetype">☑ 原型锚点</label>
-        <input type="checkbox" id="tokenslim_archetype" checked />
-    </div>
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_schema">☑ Schema 压缩</label>
-        <input type="checkbox" id="tokenslim_schema" checked />
-    </div>
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_feynman">☑ Feynman 自检</label>
-        <input type="checkbox" id="tokenslim_feynman" checked />
-    </div>
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_auto_inject">☑ 自动注入</label>
-        <input type="checkbox" id="tokenslim_auto_inject" checked />
-    </div>
-    <div class="tokenslim-setting-row">
-        <label for="tokenslim_chinese_tax">中文token税规避</label>
-        <select id="tokenslim_chinese_tax">
-            <option value="off">关闭（默认）</option>
-            <option value="english_terms">术语英文</option>
-            <option value="bilingual">中英双语</option>
-        </select>
-    </div>
-
-    <div class="tokenslim-divider"></div>
-
-    <!-- 操作按钮 -->
-    <div class="tokenslim-btn-group">
-        <button class="tokenslim-btn tokenslim-btn-primary" id="tokenslim_generate_btn">⚡ 生成 FCC</button>
-        <button class="tokenslim-btn" id="tokenslim_rebuild_btn" style="display:none">🔄 重建</button>
-        <button class="tokenslim-btn" id="tokenslim_clear_btn" style="display:none">🗑 清除</button>
-    </div>
-
-    <!-- 压缩结果 -->
-    <div id="tokenslim_compress_result" style="display:none"></div>
-
-    <!-- FCC 内容 -->
-    <textarea class="tokenslim-fcc-content" id="tokenslim_fcc_content" style="display:none" readonly></textarea>
-
-    <div class="tokenslim-divider"></div>
-
-    <!-- 增量补丁 -->
-    <div class="tokenslim-patches" id="tokenslim_patches_section">
-        <h4>📝 增量补丁</h4>
-        <div class="tokenslim-patch-input-row">
-            <input type="text" id="tokenslim_patch_input" placeholder="输入补丁内容（如：关系更新: 与张三结盟）" />
-            <button class="tokenslim-btn" id="tokenslim_add_patch_btn">+ 添加</button>
+<div class="tokenslim-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>🔧 TokenSlim — 冻结压缩典籍（FCC）</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
-        <div class="tokenslim-patches-list" id="tokenslim_patches_list" style="display:none"></div>
-        <button class="tokenslim-btn" id="tokenslim_fold_patches_btn" style="display:none">📦 折叠补丁</button>
-    </div>
+        <div class="inline-drawer-content">
+            <!-- 启用开关 -->
+            <div class="tokenslim-block flex-container">
+                <input id="tokenslim_enabled" type="checkbox" />
+                <label for="tokenslim_enabled">启用 TokenSlim</label>
+            </div>
 
-    <div class="tokenslim-divider"></div>
+            <!-- 格式选择 -->
+            <div class="tokenslim-block flex-container">
+                <label for="tokenslim_format">压缩格式</label>
+                <select id="tokenslim_format">
+                    <option value="plist">PList（默认推荐）</option>
+                    <option value="concise">精简列表</option>
+                    <option value="wplus">W+ 简化</option>
+                    <option value="wplusplus">W++</option>
+                </select>
+            </div>
 
-    <!-- 缓存健康度 -->
-    <div>
-        <h4>💾 缓存健康度</h4>
-        <div class="tokenslim-btn-group">
-            <button class="tokenslim-btn" id="tokenslim_cache_check_btn">🔍 检测</button>
+            <!-- Token 目标 -->
+            <div class="tokenslim-block flex-container">
+                <label for="tokenslim_token_target">Token 目标</label>
+                <input id="tokenslim_token_target" type="number" min="50" max="500" value="150" />
+            </div>
+
+            <!-- 选项组 -->
+            <div class="tokenslim-block">
+                <div class="flex-container">
+                    <input id="tokenslim_archetype" type="checkbox" checked />
+                    <label for="tokenslim_archetype">原型锚点</label>
+                </div>
+                <div class="flex-container">
+                    <input id="tokenslim_schema" type="checkbox" checked />
+                    <label for="tokenslim_schema">Schema 压缩</label>
+                </div>
+                <div class="flex-container">
+                    <input id="tokenslim_feynman" type="checkbox" checked />
+                    <label for="tokenslim_feynman">Feynman 自检</label>
+                </div>
+                <div class="flex-container">
+                    <input id="tokenslim_auto_inject" type="checkbox" checked />
+                    <label for="tokenslim_auto_inject">自动注入</label>
+                </div>
+            </div>
+
+            <!-- 中文 token 税规避 -->
+            <div class="tokenslim-block flex-container">
+                <label for="tokenslim_chinese_tax">中文 token 税规避</label>
+                <select id="tokenslim_chinese_tax">
+                    <option value="off">关闭</option>
+                    <option value="english_terms">英文术语替换</option>
+                    <option value="bilingual">双语标注</option>
+                </select>
+            </div>
+
+            <hr class="sysHR" />
+
+            <!-- 操作按钮 -->
+            <div class="tokenslim-block">
+                <div id="tokenslim_status" class="tokenslim-status">
+                    <span class="tokenslim-status-inactive">⬜ FCC 未生成</span>
+                </div>
+                <div class="flex-container flexGap5">
+                    <input id="tokenslim_generate_btn" class="menu_button" type="submit" value="⚡ 生成 FCC" />
+                    <input id="tokenslim_rebuild_btn" class="menu_button" type="submit" value="🔄 重建" style="display:none" />
+                    <input id="tokenslim_clear_btn" class="menu_button" type="submit" value="🗑 清除" style="display:none" />
+                </div>
+            </div>
+
+            <!-- 压缩结果 -->
+            <div id="tokenslim_compress_result" class="tokenslim-block" style="display:none"></div>
+
+            <!-- FCC 元信息 -->
+            <div id="tokenslim_fcc_meta" class="tokenslim-meta" style="display:none"></div>
+
+            <!-- FCC 内容预览 -->
+            <textarea id="tokenslim_fcc_content" class="text_pole tokenslim-textarea" rows="6" readonly style="display:none"></textarea>
+
+            <hr class="sysHR" />
+
+            <!-- 补丁区 -->
+            <div class="tokenslim-block">
+                <b>📝 增量补丁</b>
+                <div class="flex-container flexGap5">
+                    <input id="tokenslim_patch_input" class="text_pole" type="text" placeholder="输入补丁内容..." />
+                    <input id="tokenslim_add_patch_btn" class="menu_button" type="submit" value="+ 添加" />
+                </div>
+                <pre id="tokenslim_patches_list" class="tokenslim-patches" style="display:none"></pre>
+                <input id="tokenslim_fold_patches_btn" class="menu_button" type="submit" value="📦 折叠补丁" style="display:none" />
+            </div>
+
+            <hr class="sysHR" />
+
+            <!-- 缓存健康度 -->
+            <div class="tokenslim-block">
+                <b>💾 缓存健康度</b>
+                <input id="tokenslim_cache_check_btn" class="menu_button" type="submit" value="🔍 检测" />
+                <div id="tokenslim_cache_result"></div>
+            </div>
         </div>
-        <div id="tokenslim_cache_result"></div>
     </div>
 </div>

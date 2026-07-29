@@ -11,8 +11,5 @@
     "homePage": "https://github.com/woodmeone/tokenslim",
     "auto_update": true,
     "minimum_client_version": "1.12.0",
-    "hooks": {
-        "activate": "init"
-    },
     "description": "通过冻结压缩典籍(FCC)压缩角色卡文本，省token + 缓存命中优化"
 }
