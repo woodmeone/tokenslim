@@ -24,15 +24,33 @@
                 <div class="flex-container">
                     <label for="tokenslim_format">压缩策略</label>
                     <i class="fa-solid fa-circle-question tokenslim-help"
-                       title="选择聊天记录的压缩策略，不同策略适合不同类型的对话。&#10;&#10;• 渐进摘要：三层渐进压缩（事件→关系→情感），保留最完整，推荐首选&#10;• 时间线：按事件顺序压缩节点，适合有剧情推进的对话&#10;• 原型锚点：识别文化原型只保留偏离部分，最省token&#10;• 关系图谱：重点提取关系变化，适合情感向对话&#10;• 行为模式：压缩为可复用行为模式，比逐条记更省&#10;• 自由摘要：AI自行决定，最灵活但风格可能不一致"></i>
+                       title="选择聊天记录的压缩策略，不同策略来自不同学科，适合不同类型的对话。&#10;&#10;🔧 结构化：省token最多，适合属性/行为/规则类内容&#10;📖 叙事：保留故事性，适合有剧情推进的对话&#10;🧠 深度：保留内在逻辑，适合角色有成长轨迹的对话&#10;🔗 关系：保留关系结构，适合多角色/复杂设定的对话&#10;&#10;不确定选什么 → 渐进摘要（默认推荐）"></i>
                 </div>
                 <select id="tokenslim_format">
-                    <option value="progressive">渐进摘要（推荐）</option>
-                    <option value="timeline">时间线</option>
-                    <option value="archetype">原型锚点</option>
-                    <option value="relationship">关系图谱</option>
-                    <option value="schema">行为模式</option>
-                    <option value="freeform">自由摘要</option>
+                    <optgroup label="🔧 结构化 — 省token最多">
+                        <option value="compact_list">精简列表</option>
+                        <option value="eav">EAV 实体属性值</option>
+                        <option value="reaction_rule">反应规则</option>
+                        <option value="keyword_cloud">关键词云</option>
+                    </optgroup>
+                    <optgroup label="📖 叙事 — 保留故事性">
+                        <option value="timeline">时间线</option>
+                        <option value="narrative_fold">叙事折叠</option>
+                        <option value="story_summary">故事摘要</option>
+                        <option value="dialogue_to_desc">对话→描述</option>
+                    </optgroup>
+                    <optgroup label="🧠 深度 — 保留内在逻辑">
+                        <option value="archetype">原型锚点</option>
+                        <option value="arc">角色弧光</option>
+                        <option value="emotion_stack">情感栈</option>
+                        <option value="schema">行为模式</option>
+                    </optgroup>
+                    <optgroup label="🔗 关系 — 保留关系结构">
+                        <option value="relationship">关系图谱</option>
+                        <option value="cornell">Cornell 笔记</option>
+                        <option value="wpp">W++/JSON</option>
+                        <option value="progressive">渐进摘要（推荐）</option>
+                    </optgroup>
                 </select>
                 <div id="tokenslim_format_example" class="tokenslim-example"></div>
             </div>
