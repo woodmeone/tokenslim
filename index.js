@@ -39,7 +39,8 @@ import { feynmanSelfCheck } from './core/feynman-check.js';
 
 // ==================== 常量 ====================
 const EXT_KEY = 'tokenslim_fcc';       // setExtensionPrompt 的唯一 key
-const EXT_NAME = 'tokenslim';          // 扩展名（用于 renderExtensionTemplateAsync 和 extension_settings）
+const EXT_NAME = 'tokenslim';          // 扩展设置名（用于 extension_settings）
+const EXT_DISPLAY_NAME = 'third-party/tokenslim'; // 完整扩展名（用于 renderExtensionTemplateAsync）
 const FCC_POSITION = 1;                // before_char
 const FCC_DEPTH = 0;
 const FCC_SCAN = false;                 // 不参与 WI 扫描
@@ -73,8 +74,8 @@ export async function init() {
     }
     const settings = extension_settings[EXT_NAME];
 
-    // 渲染设置面板
-    const settingsHtml = await renderExtensionTemplateAsync(EXT_NAME, 'settings');
+    // 渲染设置面板（需要完整扩展名 third-party/tokenslim）
+    const settingsHtml = await renderExtensionTemplateAsync(EXT_DISPLAY_NAME, 'settings');
     $('#extensions_settings').append(settingsHtml);
 
     // 绑定 UI 事件
