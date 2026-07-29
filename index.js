@@ -199,6 +199,48 @@ function checkAIAvailable() {
     return { available: true, api };
 }
 
+// ==================== 收集所有文本源 ====================
+function collectAllText(charData) {
+    const ctx = SillyTavern.getContext();
+    const char = charData.char;
+    const data = char.data || {};
+    const parts = [];
+
+    // 1. 角色卡基础字段
+    if (data.description?.trim()) parts.push({ label: '【角色描述】', text: data.description.trim() });
+    if (data.personality?.trim()) parts.push({ label: '【性格】', text: data.personality.trim() });
+    if (data.scenario?.trim()) parts.push({ label: '【场景】', text: data.scenario.trim() });
+    if (data.first_mes?.trim()) parts.push({ label: '【开场白】', text: data.first_mes.trim() });
+    if (data.mes_example?.trim()) parts.push({ label: '【示例对话】', text: data.mes_example.trim() });
+
+    // 2. 世界书条目（character_book）
+    const book = data.character_book?.entries;
+    if (book) {
+        const enabledEntries = Object.values(book)
+            .filter(e => e.enabled && e.content?.trim())
+            .sort((a, b) => (a.position || 0) - (b.position || 0));
+        if (enabledEntries.length > 0) {
+            const bookText = enabledEntries
+                .map(e => `[${e.name || e.comment || '条目'}] ${e.content.trim()}`)
+                .join('\n');
+            parts.push({ label: '【世界书】', text: bookText });
+        }
+    }
+
+    // 3. 聊天记录
+    const chat = ctx.chat;
+    if (chat && chat.length > 0) {
+        const chatMessages = chat
+            .filter(m => m.mes && !m.is_system)
+            .map(m => `${m.is_user ? '用户' : (m.name || '角色')}: ${m.mes.trim()}`);
+        if (chatMessages.length > 0) {
+            parts.push({ label: '【聊天记录】', text: chatMessages.join('\n') });
+        }
+    }
+
+    return parts;
+}
+
 // ==================== 生成 FCC ====================
 async function handleGenerateFCC(settings) {
     // 先检查 AI API
@@ -219,17 +261,20 @@ async function handleGenerateFCC(settings) {
             return;
         }
 
-        const { charId, char } = charData;
-
-        const description = char.data.description || '';
-        const personality = char.data.personality || '';
-        const scenario = char.data.scenario || '';
-        const allOriginalText = [description, personality, scenario].filter(Boolean).join('\n\n');
-
-        if (!allOriginalText.trim()) {
-            toastr.error('角色卡文本为空', 'TokenSlim');
+        // 收集所有文本源
+        const textParts = collectAllText(charData);
+        if (textParts.length === 0) {
+            toastr.error('没有可压缩的文本内容（角色卡/世界书/聊天记录均为空）', 'TokenSlim');
             return;
         }
+
+        const allOriginalText = textParts.map(p => `${p.label}\n${p.text}`).join('\n\n');
+
+        // 显示收集到的文本源信息
+        const sourceSummary = textParts.map(p =>
+            `${p.label} ${p.text.length}字`
+        ).join('、');
+        toastr.info(`正在压缩: ${sourceSummary}`, 'TokenSlim');
 
         // 计算原始 token 数
         const originalTokens = await countTokens(allOriginalText);
