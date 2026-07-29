@@ -1,61 +1,66 @@
 <div class="tokenslim-settings">
     <div class="inline-drawer">
         <div class="inline-drawer-toggle inline-drawer-header">
-            <b>🔧 TokenSlim — 冻结压缩典籍（FCC）</b>
+            <b>🔧 TokenSlim — 聊天记录压缩</b>
             <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
         </div>
         <div class="inline-drawer-content">
+
+            <!-- 说明 -->
+            <div class="tokenslim-info">
+                压缩聊天记录以节省 token，角色卡和世界书保持原样不压缩。
+                <i class="fa-solid fa-circle-question tokenslim-help"
+                   title="TokenSlim 只压缩聊天记录。压缩时会参考角色卡和世界书的内容，确保不会遗漏与角色设定相关的重要信息。压缩后的内容会注入到 prompt 中。"></i>
+            </div>
+
             <!-- 启用开关 -->
             <div class="tokenslim-block flex-container">
                 <input id="tokenslim_enabled" type="checkbox" />
                 <label for="tokenslim_enabled">启用 TokenSlim</label>
             </div>
 
-            <!-- 格式选择 -->
-            <div class="tokenslim-block flex-container">
-                <label for="tokenslim_format">压缩格式</label>
+            <!-- 压缩格式 -->
+            <div class="tokenslim-block">
+                <div class="flex-container">
+                    <label for="tokenslim_format">压缩格式</label>
+                    <i class="fa-solid fa-circle-question tokenslim-help"
+                       title="选择聊天记录的压缩方式。不同格式适合不同类型的对话。&#10;&#10;• 时间线：按事件发生顺序压缩，适合有明确剧情推进的对话&#10;• 关系图谱：重点提取角色关系变化，适合情感向对话&#10;• 关键事件：只保留转折点，最省 token&#10;• 场景摘要：按地点/场景分段，适合场景切换多的对话&#10;• PList：结构化属性列表，适合信息密集型对话&#10;• 自由摘要：AI自行决定最佳方式，最灵活"></i>
+                </div>
                 <select id="tokenslim_format">
-                    <option value="plist">PList（默认推荐）</option>
-                    <option value="concise">精简列表</option>
-                    <option value="wplus">W+ 简化</option>
-                    <option value="wplusplus">W++</option>
+                    <option value="timeline">时间线</option>
+                    <option value="relationship">关系图谱</option>
+                    <option value="events">关键事件</option>
+                    <option value="scenes">场景摘要</option>
+                    <option value="plist">PList</option>
+                    <option value="freeform">自由摘要</option>
                 </select>
+                <div id="tokenslim_format_example" class="tokenslim-example"></div>
             </div>
 
             <!-- Token 目标 -->
-            <div class="tokenslim-block flex-container">
-                <label for="tokenslim_token_target">Token 目标</label>
-                <input id="tokenslim_token_target" type="number" min="50" max="500" value="150" />
-            </div>
-
-            <!-- 选项组 -->
             <div class="tokenslim-block">
                 <div class="flex-container">
-                    <input id="tokenslim_archetype" type="checkbox" checked />
-                    <label for="tokenslim_archetype">原型锚点</label>
+                    <label for="tokenslim_token_target">目标 token 数</label>
+                    <i class="fa-solid fa-circle-question tokenslim-help"
+                       title="压缩后的大致 token 数量。&#10;&#10;• 150-200：极简摘要，只保留最关键信息&#10;• 300：平衡模式，保留大部分关键信息（推荐）&#10;• 500：详细摘要，接近完整但去冗余&#10;&#10;例：20条聊天记录约 2000 tokens → 压缩到 300 tokens = 节省 85%"></i>
                 </div>
-                <div class="flex-container">
-                    <input id="tokenslim_schema" type="checkbox" checked />
-                    <label for="tokenslim_schema">Schema 压缩</label>
-                </div>
-                <div class="flex-container">
-                    <input id="tokenslim_feynman" type="checkbox" checked />
-                    <label for="tokenslim_feynman">Feynman 自检</label>
-                </div>
-                <div class="flex-container">
-                    <input id="tokenslim_auto_inject" type="checkbox" checked />
-                    <label for="tokenslim_auto_inject">自动注入</label>
-                </div>
+                <input id="tokenslim_token_target" type="number" min="50" max="1000" value="300" />
             </div>
 
-            <!-- 中文 token 税规避 -->
+            <!-- Feynman 自检 -->
             <div class="tokenslim-block flex-container">
-                <label for="tokenslim_chinese_tax">中文 token 税规避</label>
-                <select id="tokenslim_chinese_tax">
-                    <option value="off">关闭</option>
-                    <option value="english_terms">英文术语替换</option>
-                    <option value="bilingual">双语标注</option>
-                </select>
+                <input id="tokenslim_feynman" type="checkbox" checked />
+                <label for="tokenslim_feynman">质量自检</label>
+                <i class="fa-solid fa-circle-question tokenslim-help"
+                   title="生成后让AI检查压缩结果是否遗漏了关键信息。&#10;&#10;作用：防止压缩过度导致重要信息丢失&#10;&#10;例：聊天中角色承诺'明天在老地方见面'，但压缩后漏掉了这条约定。自检会发现并补上。&#10;&#10;会额外消耗一次 AI 调用。"></i>
+            </div>
+
+            <!-- 自动注入 -->
+            <div class="tokenslim-block flex-container">
+                <input id="tokenslim_auto_inject" type="checkbox" checked />
+                <label for="tokenslim_auto_inject">自动注入</label>
+                <i class="fa-solid fa-circle-question tokenslim-help"
+                   title="自动将 FCC 注入到 prompt 中。&#10;&#10;作用：每次发送消息时，压缩后的聊天摘要会自动加到 prompt 前面（before_char 位置）&#10;&#10;例：开启后，你发送消息时 AI 会自动看到压缩后的聊天摘要，而不需要你手动操作。&#10;&#10;注意：FCC 注入位置在角色卡之前，有利于缓存命中。"></i>
             </div>
 
             <hr class="sysHR" />
@@ -85,9 +90,13 @@
 
             <!-- 补丁区 -->
             <div class="tokenslim-block">
-                <b>📝 增量补丁</b>
+                <div class="flex-container">
+                    <b>📝 增量补丁</b>
+                    <i class="fa-solid fa-circle-question tokenslim-help"
+                       title="手动添加增量信息到 FCC。&#10;&#10;作用：对话中发生了重要变化（如角色关系改变、新约定）时，可以手动追加补丁，而不需要重新生成整个 FCC。&#10;&#10;例：对话中角色说'我们现在是恋人了'，你可以添加补丁：'关系更新：从朋友变为恋人'&#10;&#10;补丁追加到 FCC 末尾，不影响已有内容的缓存命中。补丁多了可以点击'折叠补丁'合并回主体。"></i>
+                </div>
                 <div class="flex-container flexGap5">
-                    <input id="tokenslim_patch_input" class="text_pole" type="text" placeholder="输入补丁内容..." />
+                    <input id="tokenslim_patch_input" class="text_pole" type="text" placeholder="例：关系更新为恋人" />
                     <input id="tokenslim_add_patch_btn" class="menu_button" type="submit" value="+ 添加" />
                 </div>
                 <pre id="tokenslim_patches_list" class="tokenslim-patches" style="display:none"></pre>
@@ -98,10 +107,15 @@
 
             <!-- 缓存健康度 -->
             <div class="tokenslim-block">
-                <b>💾 缓存健康度</b>
+                <div class="flex-container">
+                    <b>💾 缓存健康度</b>
+                    <i class="fa-solid fa-circle-question tokenslim-help"
+                       title="检测当前配置是否有利于 API 缓存命中。&#10;&#10;作用：缓存命中时，相同前缀的 token 计费更便宜（如 OpenAI 5折、Anthropic 9折）&#10;&#10;例：如果 FCC 内容稳定不变且在 prompt 最前面，每次对话时 API 会识别出相同前缀并给折扣。&#10;&#10;影响缓存的因素：FCC 前缀长度、时间戳变量、深度注入条目等。"></i>
+                </div>
                 <input id="tokenslim_cache_check_btn" class="menu_button" type="submit" value="🔍 检测" />
                 <div id="tokenslim_cache_result"></div>
             </div>
+
         </div>
     </div>
 </div>

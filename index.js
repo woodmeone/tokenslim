@@ -1,165 +1,120 @@
 /**
  * TokenSlim - 角色卡省Token插件
- * 通过 FCC（冻结压缩典籍）实现角色卡文本压缩 + 缓存命中率优化
+ * 核心思路：角色卡+世界书不压缩（保持原样），只压缩聊天记录
+ * 压缩时用角色卡+世界书作为参考上下文，让AI知道什么重要
  */
 
-import { extension_settings, saveMetadataDebounced, renderExtensionTemplateAsync } from '../../../extensions.js';
+import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../script.js';
 
 // ==================== 常量 ====================
 const EXT_KEY = 'tokenslim_fcc';
 const EXT_NAME = 'tokenslim';
-const EXT_DISPLAY_NAME = 'third-party/tokenslim';
-const EXT_FOLDER = `scripts/extensions/${EXT_DISPLAY_NAME}`;
+const EXT_FOLDER = `scripts/extensions/third-party/${EXT_NAME}`;
 const FCC_POSITION = 1;  // before_char
 const FCC_DEPTH = 0;
 const FCC_SCAN = false;
-const DEFAULT_TOKEN_TARGET = 150;
-const DEFAULT_FORMAT = 'plist';
 
 // ==================== 默认设置 ====================
 const defaultSettings = {
     enabled: true,
-    format: DEFAULT_FORMAT,
-    tokenTarget: DEFAULT_TOKEN_TARGET,
-    archetypeAnchoring: true,
-    schemaCompression: true,
-    feynmanCheck: true,
-    autoInject: true,
-    chineseTokenTaxOpt: 'off',
+    format: 'timeline',       // 压缩格式
+    tokenTarget: 300,         // 目标 token 数
+    feynmanCheck: true,       // 质量自检
+    autoInject: true,         // 自动注入
+    autoLoadFCC: true,        // 打开角色时自动加载已有FCC
 };
 
 // ==================== 扩展状态 ====================
 let currentFCC = null;
 
-// ==================== 初始化（jQuery 自动执行） ====================
+// ==================== 压缩格式定义 ====================
+const FORMAT_OPTIONS = {
+    timeline: {
+        name: '时间线',
+        desc: '按时间顺序压缩关键事件节点',
+        example: 'T1: 初遇(公园,闲聊) → T2: 透露秘密(咖啡馆) → T3: 关系转折(雨夜,情感爆发)',
+    },
+    relationship: {
+        name: '关系图谱',
+        desc: '提取角色间关系变化轨迹',
+        example: '(用户,艾莉丝): 陌生人→相识→信任→亲密 | 关键转折: 咖啡馆透露身世',
+    },
+    events: {
+        name: '关键事件',
+        desc: '只保留改变故事走向的转折点',
+        example: '①初遇公园 ②咖啡馆深入对话 ③雨夜信任危机 ④和解后关系深化',
+    },
+    scenes: {
+        name: '场景摘要',
+        desc: '按场景分段压缩，保留场景内核心互动',
+        example: '[公园] 初遇,天气,闲聊 | [咖啡馆] 深入对话,透露身世 | [雨夜] 情感冲突,和解',
+    },
+    plist: {
+        name: 'PList',
+        desc: '结构化属性列表，适合角色属性密集的对话',
+        example: '[- 关系: 朋友→恋人; - 事件: 初遇→秘密→信任→亲密; - 情感: 疑虑→好奇→关心→深情;]',
+    },
+    freeform: {
+        name: '自由摘要',
+        desc: 'AI自由决定最佳压缩方式，最灵活',
+        example: '用户与艾莉丝初遇于公园。几次深入交谈后，艾莉丝透露了自己的失忆秘密。经历雨夜的情感冲突后，两人关系从朋友升华为恋人。',
+    },
+};
+
+// ==================== 初始化 ====================
 jQuery(async () => {
     console.log('TokenSlim: 初始化...');
 
-    // 初始化设置
     if (!extension_settings[EXT_NAME]) {
         extension_settings[EXT_NAME] = { ...defaultSettings };
     }
     const settings = extension_settings[EXT_NAME];
 
-    // 渲染设置面板
+    // 确保 charData 子对象存在
+    if (!settings.charData) settings.charData = {};
+
     const settingsHtml = await $.get(`${EXT_FOLDER}/settings.html`);
     $('#extensions_settings').append(settingsHtml);
 
-    // 绑定 UI 事件
     bindUIEvents(settings);
 
-    // 监听事件：角色卡加载时注入 FCC
+    // 监听聊天切换事件，自动加载该角色的 FCC
     const ctx = SillyTavern.getContext();
-    ctx.eventSource.on(ctx.eventTypes.CHARACTER_MESSAGE_RENDERED, () => {
-        if (settings.autoInject) {
-            ensureFCCInjected();
+    ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
+        if (settings.autoLoadFCC) {
+            currentFCC = loadFCC();
+            if (currentFCC && settings.enabled && settings.autoInject) {
+                injectFCC(currentFCC);
+            }
+            updateUIState(settings);
         }
     });
 
-    // 监听事件：生成前兜底注入
+    // 监听生成前兜底注入
     ctx.eventSource.on(ctx.eventTypes.GENERATION_AFTER_COMMANDS, () => {
-        if (settings.autoInject) {
+        if (settings.enabled && settings.autoInject) {
             ensureFCCInjected();
         }
     });
 
-    // 加载当前角色卡的 FCC
+    // 初始加载
     currentFCC = loadFCC();
-    if (currentFCC && settings.autoInject) {
+    if (currentFCC && settings.enabled && settings.autoInject) {
         injectFCC(currentFCC);
     }
-
-    // 更新 UI 状态
     updateUIState(settings);
 
     console.log('TokenSlim: 初始化完成');
 });
 
-// ==================== UI 事件绑定 ====================
-function bindUIEvents(settings) {
-    // 启用/禁用
-    $('#tokenslim_enabled').on('change', function () {
-        settings.enabled = !!$(this).prop('checked');
-        saveSettingsDebounced();
-        if (!settings.enabled) {
-            removeFCC();
-        } else if (currentFCC) {
-            injectFCC(currentFCC);
-        }
-    });
-
-    // 格式选择
-    $('#tokenslim_format').on('change', function () {
-        settings.format = String($(this).val());
-        saveSettingsDebounced();
-    });
-
-    // Token 目标
-    $('#tokenslim_token_target').on('input', function () {
-        settings.tokenTarget = parseInt(String($(this).val())) || DEFAULT_TOKEN_TARGET;
-        saveSettingsDebounced();
-    });
-
-    // 原型锚点
-    $('#tokenslim_archetype').on('change', function () {
-        settings.archetypeAnchoring = !!$(this).prop('checked');
-        saveSettingsDebounced();
-    });
-
-    // Schema 压缩
-    $('#tokenslim_schema').on('change', function () {
-        settings.schemaCompression = !!$(this).prop('checked');
-        saveSettingsDebounced();
-    });
-
-    // Feynman 自检
-    $('#tokenslim_feynman').on('change', function () {
-        settings.feynmanCheck = !!$(this).prop('checked');
-        saveSettingsDebounced();
-    });
-
-    // 自动注入
-    $('#tokenslim_auto_inject').on('change', function () {
-        settings.autoInject = !!$(this).prop('checked');
-        saveSettingsDebounced();
-    });
-
-    // 中文 token 税规避
-    $('#tokenslim_chinese_tax').on('change', function () {
-        settings.chineseTokenTaxOpt = String($(this).val());
-        saveSettingsDebounced();
-    });
-
-    // 生成 FCC 按钮
-    $('#tokenslim_generate_btn').on('click', async function () {
-        await handleGenerateFCC(settings);
-    });
-
-    // 重建 FCC 按钮
-    $('#tokenslim_rebuild_btn').on('click', async function () {
-        await handleGenerateFCC(settings);
-    });
-
-    // 清除 FCC 按钮
-    $('#tokenslim_clear_btn').on('click', function () {
-        handleClearFCC(settings);
-    });
-
-    // 添加补丁按钮
-    $('#tokenslim_add_patch_btn').on('click', function () {
-        handleAddPatch(settings);
-    });
-
-    // 折叠补丁按钮
-    $('#tokenslim_fold_patches_btn').on('click', async function () {
-        await handleFoldPatches(settings);
-    });
-
-    // 缓存健康度检测按钮
-    $('#tokenslim_cache_check_btn').on('click', function () {
-        handleCacheCheck();
-    });
+// ==================== 获取当前角色标识 ====================
+function getCharacterKey() {
+    const ctx = SillyTavern.getContext();
+    const charData = getCurrentCharacterData();
+    if (!charData) return null;
+    // 用 avatar 文件名作为唯一标识
+    return charData.char?.avatar || null;
 }
 
 // ==================== 获取当前角色卡数据 ====================
@@ -167,142 +122,158 @@ function getCurrentCharacterData() {
     const ctx = SillyTavern.getContext();
     const charId = ctx.characterId;
 
-    // 方式1：通过 characterId 直接取
     if (charId !== undefined && charId !== null) {
         const char = ctx.characters[charId];
-        if (char?.data) {
-            return { charId, char };
-        }
+        if (char?.data) return { charId, char };
     }
 
-    // 方式2：尝试从 chat metadata 反推
     if (ctx.chat?.length > 0) {
-        // 有聊天记录说明一定有角色加载过
         for (let i = 0; i < ctx.characters.length; i++) {
             const c = ctx.characters[i];
-            if (c?.data && c.chat === ctx.chatId) {
-                return { charId: i, char: c };
-            }
+            if (c?.data && c.chat === ctx.chatId) return { charId: i, char: c };
         }
     }
 
     return null;
 }
 
-// ==================== 检测 AI API 是否可用 ====================
+// ==================== 检测 AI API ====================
 function checkAIAvailable() {
     const ctx = SillyTavern.getContext();
     const api = ctx.mainApi;
     if (!api || api === 'undefined') {
-        return { available: false, reason: '未配置 AI API。请先在 SillyTavern 的 API 设置中配置你的 AI 连接（如 OpenAI、Claude 等），TokenSlim 会复用该连接进行压缩。' };
+        return { available: false, reason: '请先在 SillyTavern 的 API 设置中配置 AI 连接（如 Claude、OpenAI 等），TokenSlim 会复用该连接进行压缩。' };
     }
     return { available: true, api };
 }
 
-// ==================== 收集所有文本源 ====================
-function collectAllText(charData) {
-    const ctx = SillyTavern.getContext();
-    const char = charData.char;
-    const data = char.data || {};
+// ==================== 收集文本 ====================
+// 参考上下文：角色卡 + 世界书（不压缩，给AI理解用）
+function getReferenceContext(charData) {
+    const data = charData.char.data || {};
     const parts = [];
 
-    // 1. 角色卡基础字段
-    if (data.description?.trim()) parts.push({ label: '【角色描述】', text: data.description.trim() });
-    if (data.personality?.trim()) parts.push({ label: '【性格】', text: data.personality.trim() });
-    if (data.scenario?.trim()) parts.push({ label: '【场景】', text: data.scenario.trim() });
-    if (data.first_mes?.trim()) parts.push({ label: '【开场白】', text: data.first_mes.trim() });
-    if (data.mes_example?.trim()) parts.push({ label: '【示例对话】', text: data.mes_example.trim() });
+    if (data.description?.trim()) parts.push(`【角色描述】\n${data.description.trim()}`);
+    if (data.personality?.trim()) parts.push(`【性格】\n${data.personality.trim()}`);
+    if (data.scenario?.trim()) parts.push(`【场景设定】\n${data.scenario.trim()}`);
 
-    // 2. 世界书条目（character_book）
     const book = data.character_book?.entries;
     if (book) {
-        const enabledEntries = Object.values(book)
-            .filter(e => e.enabled && e.content?.trim())
-            .sort((a, b) => (a.position || 0) - (b.position || 0));
-        if (enabledEntries.length > 0) {
-            const bookText = enabledEntries
-                .map(e => `[${e.name || e.comment || '条目'}] ${e.content.trim()}`)
-                .join('\n');
-            parts.push({ label: '【世界书】', text: bookText });
+        const enabled = Object.values(book).filter(e => e.enabled && e.content?.trim());
+        if (enabled.length > 0) {
+            const bookText = enabled.map(e => `[${e.name || e.comment || '条目'}] ${e.content.trim()}`).join('\n');
+            parts.push(`【世界书】\n${bookText}`);
         }
     }
 
-    // 3. 聊天记录
+    return parts.join('\n\n');
+}
+
+// 压缩目标：聊天记录
+function getChatText() {
+    const ctx = SillyTavern.getContext();
     const chat = ctx.chat;
-    if (chat && chat.length > 0) {
-        const chatMessages = chat
-            .filter(m => m.mes && !m.is_system)
-            .map(m => `${m.is_user ? '用户' : (m.name || '角色')}: ${m.mes.trim()}`);
-        if (chatMessages.length > 0) {
-            parts.push({ label: '【聊天记录】', text: chatMessages.join('\n') });
-        }
-    }
+    if (!chat || chat.length === 0) return '';
 
-    return parts;
+    return chat
+        .filter(m => m.mes && !m.is_system)
+        .map(m => {
+            const role = m.is_user ? '用户' : (m.name || '角色');
+            return `${role}: ${m.mes.trim()}`;
+        })
+        .join('\n');
+}
+
+// ==================== UI 事件绑定 ====================
+function bindUIEvents(settings) {
+    $('#tokenslim_enabled').on('change', function () {
+        settings.enabled = !!$(this).prop('checked');
+        saveSettingsDebounced();
+        if (!settings.enabled) removeFCC();
+        else if (currentFCC) injectFCC(currentFCC);
+    });
+
+    $('#tokenslim_format').on('change', function () {
+        settings.format = String($(this).val());
+        saveSettingsDebounced();
+        updateFormatExample();
+    });
+
+    $('#tokenslim_token_target').on('input', function () {
+        settings.tokenTarget = parseInt(String($(this).val())) || 300;
+        saveSettingsDebounced();
+    });
+
+    $('#tokenslim_feynman').on('change', function () {
+        settings.feynmanCheck = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tokenslim_auto_inject').on('change', function () {
+        settings.autoInject = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tokenslim_generate_btn').on('click', async () => await handleGenerateFCC(settings));
+    $('#tokenslim_rebuild_btn').on('click', async () => await handleGenerateFCC(settings));
+    $('#tokenslim_clear_btn').on('click', () => handleClearFCC(settings));
+    $('#tokenslim_add_patch_btn').on('click', () => handleAddPatch(settings));
+    $('#tokenslim_fold_patches_btn').on('click', async () => await handleFoldPatches(settings));
+    $('#tokenslim_cache_check_btn').on('click', () => handleCacheCheck());
 }
 
 // ==================== 生成 FCC ====================
 async function handleGenerateFCC(settings) {
-    // 先检查 AI API
     const aiCheck = checkAIAvailable();
     if (!aiCheck.available) {
         toastr.error(aiCheck.reason, 'TokenSlim - 需要配置AI');
         return;
     }
 
+    const charData = getCurrentCharacterData();
+    if (!charData) {
+        toastr.error('请先打开一个角色的聊天', 'TokenSlim');
+        return;
+    }
+
+    const chatText = getChatText();
+    if (!chatText.trim()) {
+        toastr.error('当前没有聊天记录可压缩', 'TokenSlim');
+        return;
+    }
+
     const btn = $('#tokenslim_generate_btn');
     const originalBtnText = btn.html();
-    btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 生成中...').prop('disabled', true);
+    btn.html('<i class="fa-solid fa-spinner fa-spin"></i> 压缩中...').prop('disabled', true);
 
     try {
-        const charData = getCurrentCharacterData();
-        if (!charData) {
-            toastr.error('请先加载角色卡（打开一个角色的聊天）', 'TokenSlim');
-            return;
-        }
+        const refContext = getReferenceContext(charData);
+        const originalTokens = await countTokens(chatText);
+        const refTokens = refContext ? await countTokens(refContext) : 0;
 
-        // 收集所有文本源
-        const textParts = collectAllText(charData);
-        if (textParts.length === 0) {
-            toastr.error('没有可压缩的文本内容（角色卡/世界书/聊天记录均为空）', 'TokenSlim');
-            return;
-        }
+        toastr.info(`聊天记录 ${originalTokens}tok | 参考上下文 ${refTokens}tok | 格式: ${FORMAT_OPTIONS[settings.format]?.name || settings.format}`, 'TokenSlim 开始压缩');
 
-        const allOriginalText = textParts.map(p => `${p.label}\n${p.text}`).join('\n\n');
+        // 核心压缩：一轮高质量压缩（不再5轮，信息损失太大）
+        let compressed = await compressChat(chatText, refContext, settings);
 
-        // 显示收集到的文本源信息
-        const sourceSummary = textParts.map(p =>
-            `${p.label} ${p.text.length}字`
-        ).join('、');
-        toastr.info(`正在压缩: ${sourceSummary}`, 'TokenSlim');
-
-        // 计算原始 token 数
-        const originalTokens = await countTokens(allOriginalText);
-
-        // 执行压缩管线
-        let compressedContent = await compressPipeline(allOriginalText, settings);
-
-        // Feynman 自检
+        // 可选：Feynman 自检
         let selfCheckResult = null;
         if (settings.feynmanCheck) {
-            selfCheckResult = await feynmanSelfCheck(compressedContent, allOriginalText);
-            if (selfCheckResult.gaps && selfCheckResult.gaps !== '无关键遗漏') {
-                compressedContent += '\n' + selfCheckResult.gaps;
+            selfCheckResult = await feynmanSelfCheck(compressed, chatText, refContext);
+            if (selfCheckResult.gaps && !selfCheckResult.gaps.includes('无关键遗漏')) {
+                compressed += '\n\n[自检补充] ' + selfCheckResult.gaps;
             }
         }
 
-        // 计算压缩后 token 数
-        const compressedTokens = await countTokens(compressedContent);
+        const compressedTokens = await countTokens(compressed);
         const ratio = originalTokens > 0 ? (compressedTokens / originalTokens) : 0;
 
-        // 生成 FCC 数据结构
         currentFCC = {
-            fcc_version: 1,
+            fcc_version: 2,
             generated_at: new Date().toISOString(),
-            source_hash: await hashText(allOriginalText),
-            compressor_version: '1.0.0',
+            format: settings.format,
             content: {
-                raw: compressedContent,
+                raw: compressed,
                 token_count: compressedTokens,
                 original_token_count: originalTokens,
                 compression_ratio: ratio,
@@ -310,22 +281,84 @@ async function handleGenerateFCC(settings) {
             patches: [],
         };
 
-        // 保存 FCC 到角色卡扩展字段
-        await saveFCC(currentFCC);
+        saveFCC(currentFCC);
+        if (settings.enabled && settings.autoInject) injectFCC(currentFCC);
 
-        // 注入 FCC
-        injectFCC(currentFCC);
-
-        // 更新 UI
         updateUIState(settings);
         updateCompressionResult(originalTokens, compressedTokens, ratio, selfCheckResult);
 
-        toastr.success(`FCC 已生成！${originalTokens} → ${compressedTokens} tokens（节省 ${Math.round((1 - ratio) * 100)}%）`, 'TokenSlim');
+        toastr.success(`FCC 已生成！${originalTokens} → ${compressedTokens} tok（节省 ${Math.round((1 - ratio) * 100)}%）`, 'TokenSlim');
     } catch (err) {
         console.error('TokenSlim: FCC 生成失败', err);
-        toastr.error('FCC 生成失败：' + err.message, 'TokenSlim');
+        toastr.error('生成失败：' + err.message, 'TokenSlim');
     } finally {
         btn.html(originalBtnText).prop('disabled', false);
+    }
+}
+
+// ==================== 核心压缩函数 ====================
+async function compressChat(chatText, refContext, settings) {
+    const ctx = SillyTavern.getContext();
+    const format = FORMAT_OPTIONS[settings.format] || FORMAT_OPTIONS.timeline;
+    const targetTokens = settings.tokenTarget || 300;
+
+    const prompt = `你是一个专业的故事摘要师。你的任务是将聊天记录压缩为精炼的摘要，保留所有对后续角色扮演有影响的关键信息。
+
+## 参考信息（角色的身份和设定，不需要压缩）
+${refContext || '（无参考信息）'}
+
+## 待压缩的聊天记录
+${chatText}
+
+## 压缩要求
+1. 格式：${format.name}（${format.desc}）
+2. 参考示例：${format.example}
+3. 目标：约 ${targetTokens} tokens，宁可保留关键信息也不要遗漏
+4. 必须保留：关键事件、关系变化、情感转折、重要承诺/约定、角色新发现
+5. 可以省略：寒暄、重复内容、无关紧要的闲聊细节
+6. 不要添加原文中没有的信息
+
+## 输出
+直接输出压缩结果，不要任何前缀、解释或标注。`;
+
+    try {
+        const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+        return (result || chatText).trim();
+    } catch (err) {
+        console.warn('TokenSlim: 压缩失败，返回原文片段', err);
+        // 降级：截取最后部分聊天记录
+        const lines = chatText.split('\n');
+        const halfLines = lines.slice(-Math.ceil(lines.length / 3));
+        return halfLines.join('\n');
+    }
+}
+
+// ==================== Feynman 自检 ====================
+async function feynmanSelfCheck(compressed, originalChat, refContext) {
+    try {
+        const ctx = SillyTavern.getContext();
+        const prompt = `你是质量检查员。对比以下聊天原文和压缩结果，检查是否有对后续角色扮演有影响的关键信息被遗漏。
+
+## 参考设定
+${refContext || '（无）'}
+
+## 聊天原文（截取）
+${originalChat.substring(0, 3000)}
+
+## 压缩结果
+${compressed}
+
+如果压缩结果已包含所有关键信息，回复"无关键遗漏"。
+否则，用一句话列出遗漏的关键信息（如"遗漏了：XXX承诺了YYY"）。`;
+
+        const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+        const gaps = (result || '').trim();
+        const score = gaps.includes('无关键遗漏') || gaps.includes('没有遗漏') ? 95 :
+                      gaps.split('\n').filter(l => l.trim()).length <= 1 ? 80 : 50;
+        return { gaps, quality_score: score };
+    } catch (err) {
+        console.warn('TokenSlim: 自检失败', err);
+        return { gaps: '', quality_score: -1 };
     }
 }
 
@@ -333,115 +366,107 @@ async function handleGenerateFCC(settings) {
 function handleClearFCC(settings) {
     removeFCC();
     currentFCC = null;
-    clearFCC();
+    const key = getCharacterKey();
+    if (key && settings.charData) {
+        delete settings.charData[key];
+        saveSettingsDebounced();
+    }
     updateUIState(settings);
     toastr.info('FCC 已清除', 'TokenSlim');
 }
 
-// ==================== 添加补丁 ====================
+// ==================== 补丁操作 ====================
 function handleAddPatch(settings) {
     const input = $('#tokenslim_patch_input');
     const content = String(input.val()).trim();
-    if (!content) {
-        toastr.warning('请输入补丁内容', 'TokenSlim');
-        return;
-    }
+    if (!content) { toastr.warning('请输入补丁内容', 'TokenSlim'); return; }
+    if (!currentFCC) { toastr.error('请先生成 FCC', 'TokenSlim'); return; }
 
-    if (!currentFCC) {
-        toastr.error('请先生成 FCC', 'TokenSlim');
-        return;
-    }
+    if (!currentFCC.patches) currentFCC.patches = [];
+    currentFCC.patches.push({
+        seq: currentFCC.patches.length + 1,
+        timestamp: new Date().toISOString(),
+        content,
+    });
+    currentFCC.content.token_count += Math.ceil(content.length / 2);
 
-    appendPatch(currentFCC, content);
     saveFCC(currentFCC);
-
-    // 重新注入
     injectFCC(currentFCC);
-
     input.val('');
     updateUIState(settings);
     toastr.success('补丁已添加', 'TokenSlim');
 }
 
-// ==================== 折叠补丁 ====================
 async function handleFoldPatches(settings) {
-    if (!currentFCC || !currentFCC.patches || currentFCC.patches.length === 0) {
-        toastr.info('没有需要折叠的补丁', 'TokenSlim');
-        return;
-    }
+    if (!currentFCC?.patches?.length) { toastr.info('没有需要折叠的补丁', 'TokenSlim'); return; }
 
     try {
-        await foldPatches(currentFCC);
-        await saveFCC(currentFCC);
+        const ctx = SillyTavern.getContext();
+        const patchText = currentFCC.patches.map(p => `[${p.seq}] ${p.content}`).join('\n');
+        const prompt = `将以下增量更新压缩为最精炼的摘要，保留所有关键变化，不要丢失任何重要信息。\n\n${patchText}\n\n压缩结果：`;
+        const folded = await ctx.generateQuietPrompt({ quietPrompt: prompt });
 
+        currentFCC.content.raw += '\n\n[更新] ' + (folded || patchText).trim();
+        currentFCC.content.token_count = await countTokens(currentFCC.content.raw);
+        currentFCC.patches = [];
+
+        saveFCC(currentFCC);
         injectFCC(currentFCC);
-
         updateUIState(settings);
         toastr.success('补丁已折叠', 'TokenSlim');
     } catch (err) {
         console.error('TokenSlim: 补丁折叠失败', err);
-        toastr.error('补丁折叠失败：' + err.message, 'TokenSlim');
+        toastr.error('折叠失败：' + err.message, 'TokenSlim');
     }
 }
 
-// ==================== 缓存健康度检测 ====================
+// ==================== 缓存健康度 ====================
 function handleCacheCheck() {
     const result = detectCacheKillers();
     const panel = $('#tokenslim_cache_result');
     panel.empty();
 
-    if (result.score >= 80) {
-        panel.append(`<div class="tokenslim-cache-good">缓存健康度: ${result.score}/100 ✓</div>`);
-    } else if (result.score >= 50) {
-        panel.append(`<div class="tokenslim-cache-warn">缓存健康度: ${result.score}/100 ⚠</div>`);
-    } else {
-        panel.append(`<div class="tokenslim-cache-bad">缓存健康度: ${result.score}/100 ✗</div>`);
-    }
+    const cls = result.score >= 80 ? 'tokenslim-cache-good' : result.score >= 50 ? 'tokenslim-cache-warn' : 'tokenslim-cache-bad';
+    panel.append(`<div class="${cls}">缓存健康度: ${result.score}/100 ${result.score >= 80 ? '✓' : result.score >= 50 ? '⚠' : '✗'}</div>`);
 
     for (const issue of result.issues) {
-        panel.append(`<div class="tokenslim-cache-issue tokenslim-cache-${issue.severity}">
-            ${issue.severity === 'critical' ? '🔴' : issue.severity === 'high' ? '🟡' : '🟢'}
-            ${issue.description} → 建议: ${issue.fix}
-        </div>`);
+        const icon = issue.severity === 'critical' ? '🔴' : issue.severity === 'high' ? '🟡' : '🟢';
+        panel.append(`<div class="tokenslim-cache-issue">${icon} ${issue.description} → ${issue.fix}</div>`);
     }
 
     const strategy = getCacheStrategy();
     panel.append(`<div class="tokenslim-cache-strategy">
-        当前API: ${strategy.provider} | 最小前缀: ${strategy.minPrefixTokens}tok |
+        API: ${strategy.provider} | 最小前缀: ${strategy.minPrefixTokens}tok |
         cache_control: ${strategy.supportsCacheControl ? '✓' : '✗'} |
         命中折扣: ${Math.round((1 - strategy.discount) * 100)}%off
     </div>`);
 }
 
-// ==================== UI 状态更新 ====================
+// ==================== UI 更新 ====================
 function updateUIState(settings) {
     const hasFCC = !!currentFCC;
 
     $('#tokenslim_enabled').prop('checked', settings.enabled);
     $('#tokenslim_format').val(settings.format);
     $('#tokenslim_token_target').val(settings.tokenTarget);
-    $('#tokenslim_archetype').prop('checked', settings.archetypeAnchoring);
-    $('#tokenslim_schema').prop('checked', settings.schemaCompression);
     $('#tokenslim_feynman').prop('checked', settings.feynmanCheck);
     $('#tokenslim_auto_inject').prop('checked', settings.autoInject);
-    $('#tokenslim_chinese_tax').val(settings.chineseTokenTaxOpt);
 
     if (hasFCC) {
-        $('#tokenslim_status').html('<span class="tokenslim-status-active">✅ FCC 已生成</span>');
-        $('#tokenslim_rebuild_btn').show();
-        $('#tokenslim_clear_btn').show();
+        const fmtName = FORMAT_OPTIONS[currentFCC.format]?.name || currentFCC.format || '未知';
+        $('#tokenslim_status').html(`<span class="tokenslim-status-active">✅ FCC 已生成 (${fmtName})</span>`);
+        $('#tokenslim_rebuild_btn, #tokenslim_clear_btn').show();
         $('#tokenslim_fcc_content').val(currentFCC.content.raw).show();
         $('#tokenslim_fcc_meta').html(
-            `生成于: ${currentFCC.generated_at?.split('T')[0] || '未知'} | ` +
-            `Token: ${currentFCC.content.token_count} | ` +
-            `压缩比: ${Math.round((1 - currentFCC.content.compression_ratio) * 100)}% 节省`
+            `生成于: ${(currentFCC.generated_at || '').split('T')[0]} | ` +
+            `${currentFCC.content.original_token_count} → ${currentFCC.content.token_count} tok | ` +
+            `节省 ${Math.round((1 - currentFCC.content.compression_ratio) * 100)}%`
         ).show();
 
-        if (currentFCC.patches && currentFCC.patches.length > 0) {
-            const patchList = currentFCC.patches.map(p =>
-                `[${p.seq}] ${p.content} (${p.tokens}tok)`
-            ).join('\n');
-            $('#tokenslim_patches_list').text(patchList).show();
+        if (currentFCC.patches?.length > 0) {
+            $('#tokenslim_patches_list').text(
+                currentFCC.patches.map(p => `[${p.seq}] ${p.content}`).join('\n')
+            ).show();
             $('#tokenslim_fold_patches_btn').show();
         } else {
             $('#tokenslim_patches_list').hide();
@@ -449,71 +474,52 @@ function updateUIState(settings) {
         }
     } else {
         $('#tokenslim_status').html('<span class="tokenslim-status-inactive">⬜ FCC 未生成</span>');
-        $('#tokenslim_rebuild_btn').hide();
-        $('#tokenslim_clear_btn').hide();
-        $('#tokenslim_fcc_content').hide();
-        $('#tokenslim_fcc_meta').hide();
-        $('#tokenslim_patches_list').hide();
-        $('#tokenslim_fold_patches_btn').hide();
+        $('#tokenslim_rebuild_btn, #tokenslim_clear_btn, #tokenslim_fcc_content, #tokenslim_fcc_meta, #tokenslim_patches_list, #tokenslim_fold_patches_btn').hide();
+    }
+
+    updateFormatExample();
+}
+
+function updateFormatExample() {
+    const fmt = FORMAT_OPTIONS[$('#tokenslim_format').val() || 'timeline'];
+    if (fmt) {
+        $('#tokenslim_format_example').text(fmt.example);
     }
 }
 
-// ==================== 压缩结果更新 ====================
 function updateCompressionResult(originalTokens, compressedTokens, ratio, selfCheckResult) {
-    const panel = $('#tokenslim_compress_result');
-    panel.html(`
+    const savePercent = Math.round((1 - ratio) * 100);
+    $('#tokenslim_compress_result').html(`
         <div class="tokenslim-result-row">
-            <span>原始: ${originalTokens} tokens</span>
+            <span>原始: ${originalTokens} tok</span>
             <span>→</span>
-            <span>压缩后: ${compressedTokens} tokens</span>
+            <span>压缩后: ${compressedTokens} tok</span>
         </div>
         <div class="tokenslim-result-bar">
-            <div class="tokenslim-result-fill" style="width: ${Math.round((1 - ratio) * 100)}%"></div>
+            <div class="tokenslim-result-fill" style="width: ${savePercent}%"></div>
         </div>
-        <div class="tokenslim-result-save">节省 ${Math.round((1 - ratio) * 100)}%</div>
-        ${selfCheckResult ? `<div class="tokenslim-result-feynman">Feynman自检: ${selfCheckResult.quality_score || 'N/A'}分</div>` : ''}
+        <div class="tokenslim-result-save">节省 ${savePercent}%</div>
+        ${selfCheckResult?.quality_score > 0 ? `<div class="tokenslim-result-feynman">自检评分: ${selfCheckResult.quality_score}分</div>` : ''}
     `).show();
 }
 
-// ==================== FCC 加载/保存/清除 ====================
+// ==================== FCC 存储（extension_settings） ====================
 function loadFCC() {
-    try {
-        const charData = getCurrentCharacterData();
-        if (!charData) return null;
-        return charData.char?.data?.extensions?.tokenslim?.fcc || null;
-    } catch (err) {
-        console.warn('TokenSlim: FCC 加载失败', err);
-        return null;
-    }
+    const settings = extension_settings[EXT_NAME];
+    if (!settings?.charData) return null;
+    const key = getCharacterKey();
+    if (!key) return null;
+    return settings.charData[key]?.fcc || null;
 }
 
-async function saveFCC(fcc) {
-    try {
-        const charData = getCurrentCharacterData();
-        if (!charData) {
-            console.warn('TokenSlim: 无法保存 FCC，角色卡未加载');
-            return;
-        }
-        const ctx = SillyTavern.getContext();
-        await ctx.writeExtensionField(charData.charId, 'tokenslim', { fcc: fcc });
-        console.log('TokenSlim: FCC 已保存');
-    } catch (err) {
-        console.error('TokenSlim: FCC 保存失败', err);
-    }
-}
-
-function clearFCC() {
-    try {
-        const charData = getCurrentCharacterData();
-        if (!charData) return;
-        const char = charData.char;
-        if (char?.data?.extensions?.tokenslim) {
-            delete char.data.extensions.tokenslim.fcc;
-            saveMetadataDebounced();
-        }
-    } catch (err) {
-        console.error('TokenSlim: FCC 清除失败', err);
-    }
+function saveFCC(fcc) {
+    const settings = extension_settings[EXT_NAME];
+    if (!settings.charData) settings.charData = {};
+    const key = getCharacterKey();
+    if (!key) { console.warn('TokenSlim: 无法保存，角色标识缺失'); return; }
+    settings.charData[key] = { fcc };
+    saveSettingsDebounced();
+    console.log('TokenSlim: FCC 已保存', key);
 }
 
 // ==================== FCC 注入 ====================
@@ -521,12 +527,9 @@ function injectFCC(fcc) {
     try {
         const ctx = SillyTavern.getContext();
         let content = fcc.content.raw;
-
-        if (fcc.patches && fcc.patches.length > 0) {
-            content += '\n\n=== 增量更新 ===\n';
-            content += fcc.patches.map(p => `[${p.seq}] ${p.content}`).join('\n');
+        if (fcc.patches?.length > 0) {
+            content += '\n\n=== 增量更新 ===\n' + fcc.patches.map(p => `[${p.seq}] ${p.content}`).join('\n');
         }
-
         ctx.setExtensionPrompt(EXT_KEY, content, FCC_POSITION, FCC_DEPTH, FCC_SCAN, 0);
         console.log('TokenSlim: FCC 已注入', { tokenCount: fcc.content?.token_count });
     } catch (err) {
@@ -538,127 +541,14 @@ function removeFCC() {
     try {
         const ctx = SillyTavern.getContext();
         ctx.setExtensionPrompt(EXT_KEY, '', FCC_POSITION, FCC_DEPTH, FCC_SCAN, 0);
-        console.log('TokenSlim: FCC 注入已移除');
     } catch (err) {
         console.error('TokenSlim: FCC 移除失败', err);
     }
 }
 
 function ensureFCCInjected() {
-    try {
-        if (!currentFCC) {
-            currentFCC = loadFCC();
-        }
-        if (currentFCC && currentFCC.content?.raw) {
-            injectFCC(currentFCC);
-        }
-    } catch (err) {
-        console.warn('TokenSlim: FCC 兜底注入失败', err);
-    }
-}
-
-// ==================== 补丁操作 ====================
-async function appendPatch(fcc, content) {
-    if (!fcc.patches) fcc.patches = [];
-    const seq = fcc.patches.length + 1;
-    const tokens = await countTokens(content);
-    fcc.patches.push({
-        seq,
-        timestamp: new Date().toISOString(),
-        trigger_reason: 'user_manual',
-        content: content,
-        tokens,
-    });
-    fcc.content.token_count += tokens;
-    console.log(`TokenSlim: 补丁 #${seq} 已追加（${tokens}tok）`);
-}
-
-async function foldPatches(fcc) {
-    if (!fcc.patches || fcc.patches.length === 0) return;
-    const ctx = SillyTavern.getContext();
-    const patchContents = fcc.patches.map(p => `[${p.seq}] ${p.content}`).join('\n');
-    const foldPrompt = `将以下增量更新压缩为最精炼的摘要，保留所有关键变化。\n\n增量更新：\n${patchContents}\n\n压缩结果：`;
-    const foldedContent = await ctx.generateQuietPrompt({ quietPrompt: foldPrompt });
-    fcc.content.raw += '\n\n=== 折叠更新 ===\n' + (foldedContent || patchContents).trim();
-    fcc.content.token_count = await countTokens(fcc.content.raw);
-    fcc.patches = [];
-    console.log('TokenSlim: 补丁已折叠');
-}
-
-// ==================== 压缩管线 ====================
-async function compressPipeline(originalText, settings) {
-    const ctx = SillyTavern.getContext();
-
-    // L1 删废话
-    const l1 = await llmCompress(ctx, originalText, DELETE_FILLER_PROMPT);
-    console.log('TokenSlim: L1 删废话完成');
-
-    // L2 类型化压缩
-    const textType = classifyText(originalText);
-    const l2Prompt = TYPE_SPECIFIC_PROMPT[textType] || TYPE_SPECIFIC_PROMPT.default;
-    const l2 = await llmCompress(ctx, l1, l2Prompt);
-    console.log('TokenSlim: L2 类型化压缩完成');
-
-    // L3 结构化
-    const l3Prompt = getFormatPrompt(settings.format, settings.tokenTarget);
-    const l3 = await llmCompress(ctx, l2, l3Prompt);
-    console.log('TokenSlim: L3 结构化完成');
-
-    // L4 原型锚点
-    let l4 = l3;
-    if (settings.archetypeAnchoring) {
-        l4 = await llmCompress(ctx, l3, ARCHETYPE_PROMPT);
-        console.log('TokenSlim: L4 原型锚点完成');
-    }
-
-    // L5 一句话总结
-    const l5 = await llmCompress(ctx, l4, SUMMARY_PROMPT);
-    console.log('TokenSlim: L5 一句话总结完成');
-
-    // 中文 token 税规避
-    let result = l5;
-    if (settings.chineseTokenTaxOpt !== 'off') {
-        result = applyChineseTokenTaxOpt(result, settings.chineseTokenTaxOpt);
-    }
-
-    return result;
-}
-
-async function llmCompress(ctx, text, prompt) {
-    try {
-        const fullPrompt = `${prompt}\n\n## 输入\n${text}\n\n## 输出\n直接输出结果，不要任何前缀或解释。`;
-        const result = await ctx.generateQuietPrompt({ quietPrompt: fullPrompt });
-        return (result || text).trim();
-    } catch (err) {
-        console.warn('TokenSlim: LLM 压缩失败，返回原文', err);
-        return text;
-    }
-}
-
-// ==================== Feynman 自检 ====================
-async function feynmanSelfCheck(compressedContent, originalText) {
-    try {
-        const ctx = SillyTavern.getContext();
-        const gapsPrompt = `对比以下原文与压缩版，仅列出压缩版中遗漏的对角色演绎有影响的关键信息。如果没有关键遗漏，回复"无关键遗漏"。\n\n原文：${originalText.substring(0, 2000)}\n压缩：${compressedContent}\n\n遗漏的关键信息：`;
-        const gaps = await ctx.generateQuietPrompt({ quietPrompt: gapsPrompt });
-        const qualityScore = calculateQualityScore(gaps);
-        return { gaps: (gaps || '').trim(), quality_score: qualityScore };
-    } catch (err) {
-        console.warn('TokenSlim: Feynman 自检失败', err);
-        return { gaps: '自检失败', quality_score: -1 };
-    }
-}
-
-function calculateQualityScore(gaps) {
-    if (!gaps) return 80;
-    const trimmed = gaps.trim();
-    if (trimmed.includes('无关键遗漏') || trimmed.includes('没有遗漏')) return 95;
-    const lines = trimmed.split('\n').filter(l => l.trim().length > 0);
-    const gapCount = Math.max(lines.length, 1);
-    if (gapCount <= 1) return 80;
-    if (gapCount <= 3) return 65;
-    if (gapCount <= 5) return 50;
-    return 30;
+    if (!currentFCC) currentFCC = loadFCC();
+    if (currentFCC?.content?.raw) injectFCC(currentFCC);
 }
 
 // ==================== Token 计数 ====================
@@ -666,29 +556,26 @@ async function countTokens(text, padding = 0) {
     try {
         const ctx = SillyTavern.getContext();
         return await ctx.getTokenCountAsync(text, padding);
-    } catch (err) {
-        console.warn('TokenSlim: Token 计数失败，使用估算', err);
-        const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
-        const otherChars = text.length - chineseChars;
-        return Math.ceil(chineseChars / 2 + otherChars / 4) + padding;
+    } catch {
+        const cn = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+        const en = text.length - cn;
+        return Math.ceil(cn / 2 + en / 4) + padding;
     }
 }
 
 // ==================== 缓存策略 ====================
 function getCacheStrategy() {
     try {
-        const ctx = SillyTavern.getContext();
-        const apiType = ctx.mainApi || 'unknown';
-        const strategies = {
-            anthropic: { provider: 'anthropic', minPrefixTokens: 1024, supportsCacheControl: true, ttl: 300, discount: 0.1 },
-            openai: { provider: 'openai', minPrefixTokens: 1024, supportsCacheControl: false, ttl: 600, discount: 0.5 },
-            openaichat: { provider: 'openai', minPrefixTokens: 1024, supportsCacheControl: false, ttl: 600, discount: 0.5 },
-            openaiendpoint: { provider: 'openai-compatible', minPrefixTokens: 1024, supportsCacheControl: false, ttl: 600, discount: 0.5 },
-            deepseek: { provider: 'deepseek', minPrefixTokens: 0, supportsCacheControl: false, ttl: 0, discount: 0.1 },
+        const api = SillyTavern.getContext().mainApi || 'unknown';
+        const map = {
+            anthropic: { provider: 'anthropic', minPrefixTokens: 1024, supportsCacheControl: true, discount: 0.1 },
+            openai: { provider: 'openai', minPrefixTokens: 1024, supportsCacheControl: false, discount: 0.5 },
+            openaichat: { provider: 'openai', minPrefixTokens: 1024, supportsCacheControl: false, discount: 0.5 },
+            deepseek: { provider: 'deepseek', minPrefixTokens: 0, supportsCacheControl: false, discount: 0.1 },
         };
-        return strategies[apiType] || { provider: apiType, minPrefixTokens: 1024, supportsCacheControl: false, ttl: 0, discount: 0 };
-    } catch (err) {
-        return { provider: 'unknown', minPrefixTokens: 1024, supportsCacheControl: false, ttl: 0, discount: 0 };
+        return map[api] || { provider: api, minPrefixTokens: 1024, supportsCacheControl: false, discount: 0 };
+    } catch {
+        return { provider: 'unknown', minPrefixTokens: 1024, supportsCacheControl: false, discount: 0 };
     }
 }
 
@@ -697,115 +584,30 @@ function detectCacheKillers() {
     const issues = [];
     try {
         const ctx = SillyTavern.getContext();
-        const charId = ctx.characterId;
-
-        // 规则1：系统提示含时间戳
         const sysPrompt = ctx.powerUserSettings?.sysprompt?.content || '';
         if (/current_time|当前时间|今天是|\{\{time\}\}|\{\{date\}\}/i.test(sysPrompt)) {
             issues.push({ severity: 'critical', description: '系统提示含时间戳变量', fix: '时间戳放最后或别放' });
         }
-
-        // 规则2：FCC 前缀长度不足
         if (currentFCC && currentFCC.content?.token_count < 1024) {
-            issues.push({ severity: 'medium', description: `FCC 仅 ${currentFCC.content.token_count} tokens（需 ≥ 1024）`, fix: '增加 FCC 内容' });
+            issues.push({ severity: 'medium', description: `FCC 仅 ${currentFCC.content.token_count} tokens（需 ≥ 1024）`, fix: '增加 FCC 内容或 token 目标' });
         }
-
-        // 规则3：绿灯条目
         const charData = getCurrentCharacterData();
         if (charData) {
             const book = charData.char?.data?.character_book?.entries;
             if (book) {
-                const greenAtBeforeAfter = Object.values(book).filter(e =>
-                    e.enabled && !e.constant && (e.position === 1 || e.position === 2)
-                );
-                if (greenAtBeforeAfter.length > 0) {
-                    issues.push({ severity: 'medium', description: `${greenAtBeforeAfter.length} 个绿灯条目在 before/after_char`, fix: '由作者决定位置（§5.2）' });
-                }
-
-                const depthEntries = Object.values(book).filter(e =>
-                    e.enabled && e.position === 4 && e.depth > 0 && e.depth < 9999
-                );
+                const depthEntries = Object.values(book).filter(e => e.enabled && e.position === 4 && e.depth > 0 && e.depth < 9999);
                 if (depthEntries.length > 0) {
                     issues.push({ severity: 'high', description: `${depthEntries.length} 个 Dn 深度注入条目`, fix: '考虑移到 D0 或 D9999' });
                 }
             }
         }
-    } catch (err) {
+    } catch {
         issues.push({ severity: 'medium', description: '缓存检测执行异常', fix: '检查连接状态' });
     }
 
     let score = 100;
     for (const issue of issues) {
-        if (issue.severity === 'critical') score -= 30;
-        else if (issue.severity === 'high') score -= 15;
-        else if (issue.severity === 'medium') score -= 5;
+        score -= issue.severity === 'critical' ? 30 : issue.severity === 'high' ? 15 : 5;
     }
     return { score: Math.max(0, Math.min(100, score)), issues };
-}
-
-// ==================== 文本分类 ====================
-function classifyText(text) {
-    const lower = text.toLowerCase();
-    const types = {
-        personality: ['性格', '个性', 'personality', '温柔', '冷酷', '傲娇'],
-        appearance: ['外貌', '外观', 'appearance', '银发', '长发', '身高'],
-        backstory: ['背景', '过去', '历史', 'backstory', '曾经', '小时候'],
-        relationship: ['关系', '朋友', '敌人', '恋人', '师徒'],
-    };
-    let maxScore = 0, maxType = 'default';
-    for (const [type, keywords] of Object.entries(types)) {
-        const score = keywords.filter(kw => lower.includes(kw)).length;
-        if (score > maxScore) { maxScore = score; maxType = type; }
-    }
-    return maxType;
-}
-
-// ==================== Prompt 模板 ====================
-const DELETE_FILLER_PROMPT = `你是一个角色卡 token 优化专家。压缩以下角色描述，在不丢失核心人设的前提下最大化减少 token。
-1. 删除不影响角色演绎的非核心细节
-2. 将散文段落压缩为关键词列表
-3. 合并语义重叠的描述
-4. 保留定义性的核心特征
-5. 输出纯文本，不要添加解释`;
-
-const TYPE_SPECIFIC_PROMPT = {
-    personality: `将以下性格描述压缩为最核心的性格关键词。只保留定义角色人设的关键词，去掉所有修饰语。每个关键词不超过4个字。`,
-    appearance: `将以下外貌描述压缩为最核心的外貌关键词。只保留最具辨识度的外貌特征，去掉常见描述。`,
-    backstory: `将以下背景故事压缩为关键事件和因果。只保留影响角色行为的核心背景，使用"事件→影响"格式。`,
-    relationship: `将以下关系描述压缩为关系三元组。格式：(角色A, 关系, 角色B)。`,
-    default: `将以下内容压缩为关键信息。去掉所有冗余描述，只保留核心事实。`,
-};
-
-const ARCHETYPE_PROMPT = `请先识别角色卡对应的文化原型（如：硬汉侦探、傲娇学妹、温柔御姐...）。然后在 PList 中添加 "- 原型: xxx;" 行。如果角色有偏离原型的设定，添加 "- 偏离原型: xxx;" 行。原型默认行为不需要写出。`;
-
-const SUMMARY_PROMPT = `为以下角色在末尾添加一行总结，格式："- 一句话: [最精炼的角色概括]"。不超过15个字，保留角色的核心矛盾或独特之处。`;
-
-function getFormatPrompt(format, tokenTarget) {
-    const prompts = {
-        plist: `将以下压缩后的描述转为 PList 格式。\n## 格式要求\n每行格式：\`- 类别: 描述1, 描述2, 描述3;\`\n描述可嵌套：\`- 外貌: 银发, 疤(左眉);\`\n用方括号包裹：\`[- ...;]\`\n## 类别参考\n原型, 龄, 外貌, 性格, 语, 能力, 缺陷, 关系, 背景, 偏离原型\n## 规则\n1. 每个描述不超过4个字 2. 同类用逗号分隔，行末分号 3. 总 token ≤ ${tokenTarget}`,
-        concise: `将以下内容转为精简列表格式。每行一个类别，格式：类别: 关键词1, 关键词2。总 token ≤ ${tokenTarget}。`,
-        wplus: `将以下内容转为 W+ 简化格式。格式：Category(keyword + keyword)。总 token ≤ ${tokenTarget}。`,
-        wplusplus: `将以下内容转为 W++ 格式。格式：[character("名"){Category("keyword" + "keyword")}]。总 token ≤ ${tokenTarget}。`,
-    };
-    return prompts[format] || prompts.plist;
-}
-
-// ==================== 中文 token 税规避 ====================
-function applyChineseTokenTaxOpt(text, strategy) {
-    const termMap = { '愤世嫉俗': 'cynical', '机器学习': 'ML', '深度学习': 'DL', '人工智能': 'AI', '自然语言': 'NLP', '创伤后应激': 'PTSD', '注意力缺陷': 'ADHD' };
-    let result = text;
-    for (const [cn, en] of Object.entries(termMap)) {
-        if (strategy === 'english_terms') result = result.replace(new RegExp(cn, 'g'), en);
-        else if (strategy === 'bilingual') result = result.replace(new RegExp(cn, 'g'), `${cn}(${en})`);
-    }
-    return result;
-}
-
-// ==================== 工具函数 ====================
-async function hashText(text) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(text);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return 'sha256:' + hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
 }
