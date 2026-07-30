@@ -119,14 +119,12 @@
                 <div class="flex-container">
                     <b>📝 增量补丁</b>
                     <i class="fa-solid fa-circle-question tokenslim-help"
-                       title="手动追加增量信息到FCC，不需要重新生成整个压缩。&#10;&#10;作用：对话中发生了重要变化时手动追加，保持FCC主体不变→缓存继续命中&#10;&#10;例：对话中角色说'我们现在是恋人了'→添加补丁：'关系更新：从朋友变为恋人'&#10;&#10;补丁追加到FCC末尾。补丁多了可以'折叠补丁'合并回主体。"></i>
-                </div>
-                <div class="flex-container flexGap5">
-                    <input id="tokenslim_patch_input" class="text_pole" type="text" placeholder="例：关系更新为恋人" />
-                    <input id="tokenslim_add_patch_btn" class="menu_button" type="submit" value="+ 添加" />
+                       title="当有新消息产生时，自动检测并生成增量压缩补丁。&#10;&#10;• 每当AI回复后，自动检查是否有3条以上新消息&#10;• 有新消息时自动调用AI生成增量摘要&#10;• 增量补丁追加到FCC末尾&#10;• 补丁多了可以'折叠补丁'合并回主体&#10;&#10;被压缩的消息会被自动隐藏（不出现在prompt中）"></i>
                 </div>
                 <pre id="tokenslim_patches_list" class="tokenslim-patches" style="display:none"></pre>
-                <input id="tokenslim_fold_patches_btn" class="menu_button" type="submit" value="📦 折叠补丁" style="display:none" />
+                <div class="flex-container flexGap5">
+                    <input id="tokenslim_fold_patches_btn" class="menu_button" type="submit" value="📦 折叠补丁" style="display:none" />
+                </div>
             </div>
 
             <hr class="sysHR" />
