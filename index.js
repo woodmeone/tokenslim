@@ -425,23 +425,41 @@ async function handleGenerateFCC(settings) {
         // 核心压缩
         let compressed = await compressChat(chatText, refContext, settings);
 
-        // 可选：Feynman 自检
+        // 压缩质量验证：如果压缩后超过原文本的80%，视为压缩失败
+        let compressedTokens = await countTokens(compressed);
+        if (originalTokens > 0 && compressedTokens > originalTokens * 0.8) {
+            console.warn('TokenSlim: 压缩比过低，尝试二次压缩', `${compressedTokens}/${originalTokens}`);
+            // 二次压缩：用更简单的提示词重试
+            compressed = await compressChat(chatText, refContext, settings, true);
+            compressedTokens = await countTokens(compressed);
+        }
+
+        // 如果仍然过长，做硬截断
+        if (originalTokens > 0 && compressedTokens > originalTokens * 0.7) {
+            console.warn('TokenSlim: 二次压缩仍不理想，提取关键句');
+            compressed = extractKeySentences(chatText, settings.tokenTarget || 300);
+            compressedTokens = await countTokens(compressed);
+        }
+
+        // 可选：Feynman 自检（仅评分，不修改内容！）
         let selfCheckResult = null;
         if (settings.feynmanCheck) {
             selfCheckResult = await feynmanSelfCheck(compressed, chatText, refContext);
-            if (selfCheckResult.gaps && !selfCheckResult.gaps.includes('无关键遗漏')) {
-                compressed += '\n\n[自检补充] ' + selfCheckResult.gaps;
-            }
+            // 自检结果仅用于显示评分，绝不追加到 FCC 内容
         }
 
-        const compressedTokens = await countTokens(compressed);
         const ratio = originalTokens > 0 ? (compressedTokens / originalTokens) : 0;
+
+        // 记录压缩覆盖的消息范围
+        const chat = SillyTavern.getContext().chat || [];
+        const coveredMessageCount = chat.filter(m => m.mes && !m.is_system).length;
 
         currentFCC = {
             fcc_version: 3,
             generated_at: new Date().toISOString(),
             format: settings.format,
             chat_length: chatText.split('\n').filter(l => l.trim()).length,
+            covered_messages: coveredMessageCount,
             content: {
                 raw: compressed,
                 token_count: compressedTokens,
@@ -457,7 +475,12 @@ async function handleGenerateFCC(settings) {
         updateUIState(settings);
         updateCompressionResult(originalTokens, compressedTokens, ratio, selfCheckResult);
 
-        toastr.success(`${originalTokens} → ${compressedTokens} tok（节省 ${Math.round((1 - ratio) * 100)}%）`, 'TokenSlim');
+        const savePercent = Math.round((1 - ratio) * 100);
+        if (savePercent < 20) {
+            toastr.warning(`压缩效果不佳：${originalTokens} → ${compressedTokens} tok（仅节省 ${savePercent}%）`, 'TokenSlim');
+        } else {
+            toastr.success(`${originalTokens} → ${compressedTokens} tok（节省 ${savePercent}%）`, 'TokenSlim');
+        }
     } catch (err) {
         console.error('TokenSlim: FCC 生成失败', err);
         toastr.error('生成失败：' + err.message, 'TokenSlim');
@@ -467,7 +490,7 @@ async function handleGenerateFCC(settings) {
 }
 
 // ==================== 核心压缩（单轮高质量压缩） ====================
-async function compressChat(chatText, refContext, settings) {
+async function compressChat(chatText, refContext, settings, isRetry = false) {
     const ctx = SillyTavern.getContext();
     const format = FORMAT_OPTIONS[settings.format] || FORMAT_OPTIONS.progressive;
     const targetTokens = settings.tokenTarget || 300;
@@ -485,16 +508,20 @@ async function compressChat(chatText, refContext, settings) {
         densityHint = '长对话，只保留：1)改变关系或剧情的事件 2)角色承诺/约定 3)情感转折点。大幅省略日常互动。';
     }
 
+    // 二次压缩时使用更强硬的提示词
+    const retryPrefix = isRetry ? `\n⚠️ 上次压缩失败（输出太长），这次必须更极端地压缩！只保留最关键的信息，大幅删减。` : '';
+
     const prompt = `# 任务：提取并压缩聊天记录（不是续写！）
 
 你是信息提取引擎，不是故事作者。你的唯一任务是从聊天记录中**提取关键信息**并按指定格式**压缩输出**。
-
+${retryPrefix}
 ## 绝对禁止（违反任何一条即失败）
 - ❌ 禁止续写故事、推测后续发展
 - ❌ 禁止添加聊天中未出现的信息
 - ❌ 禁止用散文/叙事体展开（除非格式要求）
 - ❌ 禁止添加"以下是压缩结果"等前缀
 - ❌ 禁止输出任何解释性文字
+- ❌ 禁止复制原文（必须改写为压缩格式）
 
 ## 角色参考信息（仅供理解，不需要压缩）
 ${refContext || '（无参考信息）'}
@@ -516,16 +543,37 @@ ${format.example}
 2. 必须保留：关键事件、关系变化、情感转折、承诺/约定、角色新发现
 3. 必须省略：寒暄、重复内容、纯语气词、无关紧要的细节
 4. 遗漏比冗余更严重——但如果原文没有，绝对不能编造
-5. 直接输出压缩结果，不要任何前缀、后缀、解释`;
+5. 直接输出压缩结果，不要任何前缀、后缀、解释
+6. 你的输出必须比原文短很多！如果输出长度接近原文，说明你做错了`;
 
     try {
         const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
-        return (result || chatText).trim();
+        return (result || '').trim();
     } catch (err) {
-        console.warn('TokenSlim: 压缩失败，返回末尾片段', err);
-        const lines = chatText.split('\n');
-        return lines.slice(-Math.ceil(lines.length / 3)).join('\n');
+        console.warn('TokenSlim: 压缩失败', err);
+        return '';
     }
+}
+
+// ==================== 硬截断：提取关键句 ====================
+function extractKeySentences(chatText, targetTokens) {
+    // 按行分割，只保留非寒暄的关键行
+    const lines = chatText.split('\n').filter(l => l.trim());
+    // 粗筛规则：去掉短行（寒暄）、去掉纯语气词
+    const keyLines = lines.filter(l => {
+        const trimmed = l.trim();
+        if (trimmed.length < 10) return false;  // 太短=寒暄
+        if (/^[嗯啊哦哈嘿呃]+$/.test(trimmed)) return false;  // 纯语气
+        return true;
+    });
+    // 按目标 token 数截断（粗略：中文2字/tok）
+    const maxChars = targetTokens * 2;
+    let result = '';
+    for (const line of keyLines) {
+        if ((result + '\n' + line).length > maxChars) break;
+        result += (result ? '\n' : '') + line;
+    }
+    return result || lines.slice(-5).join('\n');
 }
 
 // ==================== Feynman 自检 ====================
