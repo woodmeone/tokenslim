@@ -29,6 +29,7 @@
                 <select id="tokenslim_format">
                     <optgroup label="🔧 结构化 — 省token最多">
                         <option value="compact_list">精简列表</option>
+                        <option value="plist">PList/SBF</option>
                         <option value="eav">EAV 实体属性值</option>
                         <option value="reaction_rule">反应规则</option>
                         <option value="keyword_cloud">关键词云</option>
@@ -52,6 +53,7 @@
                         <option value="progressive">渐进摘要（推荐）</option>
                     </optgroup>
                 </select>
+                <div id="tokenslim_format_desc" class="tokenslim-format-desc"></div>
                 <div id="tokenslim_format_example" class="tokenslim-example"></div>
             </div>
 
@@ -96,8 +98,19 @@
             </div>
 
             <div id="tokenslim_compress_result" class="tokenslim-block" style="display:none"></div>
-            <div id="tokenslim_fcc_meta" class="tokenslim-meta" style="display:none"></div>
-            <textarea id="tokenslim_fcc_content" class="text_pole tokenslim-textarea" rows="6" readonly style="display:none"></textarea>
+
+            <!-- FCC 内容展示 -->
+            <div id="tokenslim_fcc_panel" class="tokenslim-fcc-panel" style="display:none">
+                <div class="tokenslim-fcc-header">
+                    <span id="tokenslim_fcc_meta" class="tokenslim-meta"></span>
+                    <div class="flex-container flexGap5">
+                        <input id="tokenslim_copy_btn" class="menu_button" type="submit" value="📋 复制" title="复制 FCC 内容到剪贴板" />
+                    </div>
+                </div>
+                <div id="tokenslim_fcc_content" class="tokenslim-fcc-content"></div>
+            </div>
+
+            <textarea id="tokenslim_fcc_raw" class="text_pole tokenslim-textarea" rows="6" style="display:none"></textarea>
 
             <hr class="sysHR" />
 

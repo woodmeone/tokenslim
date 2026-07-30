@@ -47,6 +47,40 @@
     border-radius: 3px;
     font-style: italic;
     line-height: 1.4;
+    white-space: pre-wrap;
+}
+
+/* 策略描述区 */
+.tokenslim-format-desc {
+    font-size: 11px;
+    color: var(--SmartThemeBodyColor);
+    opacity: 0.85;
+    margin-top: 4px;
+    padding: 5px 8px;
+    background: var(--black20a);
+    border-radius: 3px;
+    line-height: 1.5;
+}
+
+.tokenslim-format-label {
+    display: inline-block;
+    background: var(--black30a);
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-right: 4px;
+    font-size: 10px;
+    opacity: 0.8;
+}
+
+/* jQuery UI tooltip 覆盖样式 */
+.tokenslim-tooltip {
+    font-size: 12px !important;
+    max-width: 320px !important;
+    padding: 8px 12px !important;
+    border-radius: 6px !important;
+    line-height: 1.5 !important;
+    white-space: pre-wrap !important;
+    z-index: 10000 !important;
 }
 
 /* 状态标签 */
@@ -102,6 +136,35 @@
     font-size: 11px;
     resize: vertical;
     min-height: 60px;
+}
+
+/* FCC 面板 */
+.tokenslim-fcc-panel {
+    margin: 5px 0;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.tokenslim-fcc-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 8px;
+    background: var(--black30a);
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+
+.tokenslim-fcc-content {
+    padding: 8px;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+    color: var(--SmartThemeBodyColor);
 }
 
 .tokenslim-meta {

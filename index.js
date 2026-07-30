@@ -50,6 +50,23 @@ const FORMAT_OPTIONS = {
         example: '外貌: 银发, 翠眼, 纤细\n性格: 温柔, 神秘, 矜持\n能力: 治愈术, 共情',
         tooltip: '规格领域方法。将属性值直接用逗号列出，不加修饰。Token效率极高。例："银发翠眼纤细"比"她有一头银色的长发，翠绿的眼睛，身材纤细"省80%。',
         category: '🔧 结构化',
+        instruction: `按以下格式输出，每行一个类别，值用逗号分隔。不要写完整句子。
+类别1: 值1, 值2, 值3
+类别2: 值1, 值2
+...只提取聊天中实际出现的信息，禁止编造。`,
+    },
+    plist: {
+        name: 'PList/SBF',
+        desc: 'Bullet point结构化，W++进化版，更紧凑',
+        example: '[- Name: 艾莉丝;\n - Age: 17;\n - Personality: 温柔, 神秘, 矜持;\n - Appearance: 银发, 翠眼;\n - Secret: 失忆;\n - Events: 初遇→咖啡馆坦白→雨夜冲突→和解;\n]',
+        tooltip: 'JanitorAI社区PList格式（W++进化版）。bullet point对LLM更友好，token效率比W++高。分号结尾，描述符用逗号分隔，括号内可嵌套原因。适合需要结构化又想省token的场景。',
+        category: '🔧 结构化',
+        instruction: `按PList格式输出。每行一个属性，破折号开头，分号结尾。格式：
+[- Name: 角色名;
+ - 属性: 值1, 值2;
+ - Events: 事件1→事件2→事件3;
+]
+只从聊天中提取真实信息，禁止编造。`,
     },
     eav: {
         name: 'EAV 实体属性值',
@@ -57,6 +74,7 @@ const FORMAT_OPTIONS = {
         example: '艾莉丝.年龄=17\n艾莉丝.发色=银\n艾莉丝.关系.用户=恋人\n艾莉丝.秘密=失忆',
         tooltip: '数据库EAV模型（Entity-Attribute-Value）。结构化程度最高，未来可直接导入数据库/表格。例："艾莉丝.关系.用户=恋人"比"艾莉丝和用户现在是恋人关系"省60%。',
         category: '🔧 结构化',
+        instruction: `按EAV格式输出。每行一个属性，格式：实体.属性=值。点号分隔层级，等号赋值。禁止写完整句子。只从聊天中提取真实信息，禁止编造。`,
     },
     reaction_rule: {
         name: '反应规则',
@@ -64,6 +82,7 @@ const FORMAT_OPTIONS = {
         example: 'WHEN 被关心 → 先拒绝后感动\nWHEN 被威胁 → 假装不在意\nWHEN 独处 → 暴露脆弱\nWHEN 提及过去 → 回避/沉默',
         tooltip: 'AI行为学方法。只写"触发条件→反应"，AI自动推演完整行为。极省token。例：一条规则"WHEN被关心→先拒绝后感动"替代20条对话记录。',
         category: '🔧 结构化',
+        instruction: `按反应规则格式输出。每行一条规则，格式：WHEN 触发条件 → 行为反应。只从聊天中归纳角色实际表现出的反应模式，禁止编造未出现过的规则。`,
     },
     keyword_cloud: {
         name: '关键词云',
@@ -71,6 +90,7 @@ const FORMAT_OPTIONS = {
         example: '银发 翠眼 温柔 神秘 失忆 治愈 咖啡馆 雨夜 恋人',
         tooltip: '语义学方法。只保留关键词，AI自行联想上下文。Token效率极高但会丢失语义关系（如"恋人"不知道是谁和谁的）。适合紧急省token场景。',
         category: '🔧 结构化',
+        instruction: `只输出空格分隔的关键词，不要任何标点、不要完整句子、不要解释。提取聊天中的关键名词、动词、形容词。禁止编造。`,
     },
 
     // --- 叙事类方法（保留故事性） ---
@@ -80,6 +100,7 @@ const FORMAT_OPTIONS = {
         example: 'T1: 初遇(公园,闲聊) → T2: 透露秘密(咖啡馆) → T3: 关系转折(雨夜,冲突) → T4: 和解(清晨)',
         tooltip: '历史学方法。按时间顺序压缩为事件节点。每个节点：地点+关键互动。适合有明确剧情推进的对话。',
         category: '📖 叙事',
+        instruction: `按时间线格式输出。每行一个时间节点，格式：T序号: 事件(地点,关键互动) → 下一个节点。只记录改变关系/剧情的关键节点，省略寒暄和日常。禁止续写或推测未来事件。`,
     },
     narrative_fold: {
         name: '叙事折叠',
@@ -87,6 +108,7 @@ const FORMAT_OPTIONS = {
         example: '【失去主题】宠物死亡(童年)+亲人离世(去年)\n【重逢主题】多年后重逢→情感爆发\n【承诺主题】"老地方见"未兑现→冲突根源',
         tooltip: '口述史方法。人脑按情感/主题记忆，不按时间线。"三次失去"压缩为一个模式比三条时间线省得多。适合情感密集的长对话。',
         category: '📖 叙事',
+        instruction: `按主题折叠输出。每个主题用【主题名】开头，后面列出相关事件，用+或→连接。把聊天中同类情感/主题的事件打包。禁止续写，禁止添加原文没有的主题。`,
     },
     story_summary: {
         name: '故事摘要',
@@ -94,6 +116,7 @@ const FORMAT_OPTIONS = {
         example: '用户与艾莉丝初遇于公园。几次深入交谈后，艾莉丝透露了失忆秘密。雨夜冲突后和解，关系升华为恋人。当前：已确立关系，她仍回避过去。',
         tooltip: '叙事学方法。3-5句话概括核心剧情。最接近自然阅读，但压缩比中等。适合想要可读性摘要的用户。',
         category: '📖 叙事',
+        instruction: `用3-5句话概括整个对话的核心剧情。每句话必须概括一个关键转折。禁止展开细节，禁止续写，禁止添加原文没有的内容。最后一句用"当前："开头描述当前状态。`,
     },
     dialogue_to_desc: {
         name: '对话→描述',
@@ -101,6 +124,7 @@ const FORMAT_OPTIONS = {
         example: '用户察觉艾莉丝异常并追问。艾莉丝先是回避，在坚持下小声承认想念用户。随后两人约定明天见面。',
         tooltip: 'NEXUSSUM方法。对话体有大量"说话人标记"和动作描写，叙述体把它们融合。800tok对话→200tok描述，信息不减。',
         category: '📖 叙事',
+        instruction: `将对话内容转为第三人称叙述体。融合相同话题的对话为一段描述。去掉说话人标记（"用户说"/"艾莉丝说"），改为叙述动作和结果。保留所有关键信息，禁止续写，禁止添加原文没有的内容。`,
     },
 
     // --- 深度理解方法（保留内在逻辑） ---
@@ -110,6 +134,12 @@ const FORMAT_OPTIONS = {
         example: '原型: 傲娇学妹\n(自动推断: 嘴硬心软/脸红/别扭关心)\n偏离: 对猫过敏(非典型)、主动表白(打破模式)\n关键事件: ①承认喜欢猫 ②主动表白',
         tooltip: '文学原型理论。说"傲娇"2字=200字详细描述，原型本身就是压缩。AI自动补全原型默认行为，只需写偏离。Token效率极高。',
         category: '🧠 深度',
+        instruction: `按以下格式输出，禁止续写：
+原型: [识别角色最接近的文化原型]
+(自动推断: [原型默认行为，用/分隔])
+偏离: [角色与原型不同的地方，用顿号分隔]
+关键事件: ①[偏离事件1] ②[偏离事件2]
+只写偏离，原型默认行为不用写。禁止编造偏离。`,
     },
     arc: {
         name: '角色弧光',
@@ -117,6 +147,12 @@ const FORMAT_OPTIONS = {
         example: '欲望: 想被理解但害怕亲密\n障碍: 失忆的秘密阻碍信任\n转变: 雨夜冲突→接受用户的关心→学会信任\n当前: 信任建立中，仍有回避倾向',
         tooltip: '文学创作法（角色弧光）。用"欲望/障碍/转变"三要素浓缩角色发展。比逐条记事件更能保留角色内在逻辑。适合角色有明显成长轨迹的对话。',
         category: '🧠 深度',
+        instruction: `按角色弧光格式输出，必须有四个字段：
+欲望: [角色内心深处想要什么]
+障碍: [什么阻止了角色得到想要的东西]
+转变: [事件→事件→事件，按顺序列出改变角色的事件]
+当前: [角色现在的状态]
+只从聊天中提取，禁止编造或推测。`,
     },
     emotion_stack: {
         name: '情感栈',
@@ -124,6 +160,11 @@ const FORMAT_OPTIONS = {
         example: '[关心↑2]→[震惊↑1]→[心痛↑3]→[释然↑2]→[深情↑3]\n转折: 心痛↑3=发现被欺骗\n当前: 深情↑3 信任恢复中',
         tooltip: 'BBSE情感编码。情感不是噪声是压缩原语。"心痛→释然→深情"5个字=整个故事弧线。极省token且保留情感脉络。',
         category: '🧠 深度',
+        instruction: `按情感栈格式输出：
+[情感↑强度]→[情感↑强度]→...
+转折: 情感↑N=触发原因
+当前: 最终情感↑强度 状态描述
+强度1-3，只记录情感变化的关键转折点，禁止编造聊天中没有的情感。`,
     },
     schema: {
         name: '行为模式',
@@ -131,6 +172,11 @@ const FORMAT_OPTIONS = {
         example: '模式1: 面对威胁→假装不在意→独处焦虑\n模式2: 收到关心→先拒绝→后感动\n偏离: 第15条消息接受了关心没拒绝(角色成长)',
         tooltip: '认知Schema理论。写一次模式，所有符合该模式的行为不用重复写。只记录偏离模式的新发现。比逐条记事件更省。',
         category: '🧠 深度',
+        instruction: `按行为模式格式输出：
+模式1: [触发情境]→[行为1]→[行为2]
+模式2: [触发情境]→[行为1]→[行为2]
+偏离: [不符合上述模式的具体事件](原因)
+只归纳聊天中反复出现的行为模式，禁止编造。偏离必须引用具体消息内容。`,
     },
 
     // --- 关系/结构方法 ---
@@ -140,6 +186,10 @@ const FORMAT_OPTIONS = {
         example: '(用户,艾莉丝): 陌生人→相识→信任→亲密\n关键转折: 咖啡馆透露身世(信任+1), 雨夜冲突(信任-1), 和解(亲密+2)',
         tooltip: '图论方法。格式：(角色A,角色B): 状态轨迹+转折说明。适合多角色、关系复杂的对话。',
         category: '🔗 关系',
+        instruction: `按关系图谱格式输出：
+(角色A,角色B): 状态1→状态2→...→当前状态
+关键转折: 事件(关系变化), 事件(关系变化)
+每个关系对一行，转折必须对应具体聊天事件。禁止编造关系变化。`,
     },
     cornell: {
         name: 'Cornell 笔记',
@@ -147,6 +197,11 @@ const FORMAT_OPTIONS = {
         example: '关键词: 失忆 咖啡馆 雨夜 和解\n笔记: 艾莉丝在咖啡馆首次透露失忆秘密；雨夜因回避问题引发冲突；次日清晨和解\n总结: 从信任危机到关系深化的转折',
         tooltip: '教育学Cornell笔记法。三层：关键词(线索)→笔记(细节)→总结(要点)。比纯摘要更有层次，比W++更可读。适合复杂设定多的对话。',
         category: '🔗 关系',
+        instruction: `按Cornell笔记格式输出三层：
+关键词: 空格分隔的关键词（5-10个）
+笔记: 用分号分隔的要点描述，每条对应一个关键事件
+总结: 一句话概括整个对话的核心变化
+只从聊天中提取，禁止续写，禁止添加原文没有的信息。`,
     },
     wpp: {
         name: 'W++/JSON',
@@ -154,13 +209,24 @@ const FORMAT_OPTIONS = {
         example: '[character("艾莉丝"){\n  relationship("用户" + "恋人")\n  personality("温柔" + "神秘")\n  secret("失忆")\n  events("初遇" + "咖啡馆坦白" + "雨夜冲突")\n}]',
         tooltip: '通用结构化格式。兼容性好但符号开销高（括号/引号占token）。适合需要与其他工具互通的场景。不推荐作为首选，其他方法更省token。',
         category: '🔗 关系',
+        instruction: `按W++格式输出。用中括号包裹角色名，大括号包裹属性，属性值用+连接。格式：
+[character("角色名"){
+  属性("值1" + "值2")
+  events("事件1" + "事件2")
+}]
+只从聊天中提取，禁止编造。`,
     },
     progressive: {
-        name: '渐进摘要',
+        name: '渐进摘要（推荐）',
         desc: '事件→关系→情感三层渐进，保留最完整',
         example: '【关键事件】初遇→透露秘密→信任危机→和解\n【关系变化】陌生人→朋友→信任→亲密\n【情感轨迹】好奇→关心→冲突→深情',
         tooltip: '渐进式摘要法（Tiago Forte）。三层渐进：事件→关系→情感。保留最完整上下文，推荐不确定选什么时的默认选项。',
         category: '🔗 关系',
+        instruction: `按三层渐进格式输出：
+【关键事件】事件1→事件2→事件3→...
+【关系变化】状态1→状态2→...→当前状态
+【情感轨迹】情感1→情感2→...→当前情感
+每层用→连接。关键事件只记改变关系/剧情的节点，关系变化只记转折，情感轨迹只记变化点。禁止续写，禁止添加原文没有的内容。`,
     },
 };
 
@@ -176,6 +242,14 @@ jQuery(async () => {
 
     const settingsHtml = await $.get(`${EXT_FOLDER}/settings.html`);
     $('#extensions_settings').append(settingsHtml);
+
+    // 初始化 jQuery UI tooltip（SillyTavern 使用 jQuery UI）
+    $('.tokenslim-help').tooltip({
+        show: { delay: 300, duration: 200 },
+        hide: { delay: 100 },
+        position: { my: 'left+10 center', at: 'right center' },
+        classes: { 'ui-tooltip': 'tokenslim-tooltip' },
+    });
 
     bindUIEvents(settings);
 
@@ -298,6 +372,23 @@ function bindUIEvents(settings) {
     $('#tokenslim_add_patch_btn').on('click', () => handleAddPatch(settings));
     $('#tokenslim_fold_patches_btn').on('click', async () => await handleFoldPatches(settings));
     $('#tokenslim_cache_check_btn').on('click', () => handleCacheCheck());
+
+    // 复制 FCC 内容
+    $('#tokenslim_copy_btn').on('click', () => {
+        if (!currentFCC?.content?.raw) return;
+        navigator.clipboard.writeText(currentFCC.content.raw).then(() => {
+            toastr.success('FCC 内容已复制到剪贴板', 'TokenSlim');
+        }).catch(() => {
+            // fallback
+            const textarea = document.createElement('textarea');
+            textarea.value = currentFCC.content.raw;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+            toastr.success('FCC 内容已复制', 'TokenSlim');
+        });
+    });
 }
 
 // ==================== 生成 FCC ====================
@@ -381,41 +472,51 @@ async function compressChat(chatText, refContext, settings) {
     const format = FORMAT_OPTIONS[settings.format] || FORMAT_OPTIONS.progressive;
     const targetTokens = settings.tokenTarget || 300;
 
-    // 根据聊天长度选择策略
+    // 根据聊天长度选择压缩强度
     const chatLines = chatText.split('\n').filter(l => l.trim()).length;
     const chatTokens = await countTokens(chatText);
 
-    let compressionStrategy = '';
+    let densityHint = '';
     if (chatTokens < 500) {
-        compressionStrategy = '对话较短，几乎不需要压缩，只去掉重复和寒暄即可。';
+        densityHint = '对话较短，保留所有实质内容，只去掉寒暄和纯语气词。';
     } else if (chatTokens < 2000) {
-        compressionStrategy = '中等长度对话，保留所有关键事件和情感变化，去掉寒暄和重复。';
+        densityHint = '中等长度，保留所有关键事件和情感变化，去掉寒暄、重复、日常互动。';
     } else {
-        compressionStrategy = '长对话，重点保留：1)改变关系或剧情的事件 2)角色做出的承诺/约定 3)情感转折点。可以大幅省略日常互动。';
+        densityHint = '长对话，只保留：1)改变关系或剧情的事件 2)角色承诺/约定 3)情感转折点。大幅省略日常互动。';
     }
 
-    const prompt = `你是一个专业的故事摘要师，正在压缩一段AI角色扮演的聊天记录。
+    const prompt = `# 任务：提取并压缩聊天记录（不是续写！）
 
-## 参考信息（角色的身份和设定，不需要压缩，仅供理解）
+你是信息提取引擎，不是故事作者。你的唯一任务是从聊天记录中**提取关键信息**并按指定格式**压缩输出**。
+
+## 绝对禁止（违反任何一条即失败）
+- ❌ 禁止续写故事、推测后续发展
+- ❌ 禁止添加聊天中未出现的信息
+- ❌ 禁止用散文/叙事体展开（除非格式要求）
+- ❌ 禁止添加"以下是压缩结果"等前缀
+- ❌ 禁止输出任何解释性文字
+
+## 角色参考信息（仅供理解，不需要压缩）
 ${refContext || '（无参考信息）'}
 
-## 待压缩的聊天记录（${chatLines}条消息，${chatTokens} tokens）
+## 待压缩的聊天记录（${chatLines}条消息，约${chatTokens} tokens）
 ${chatText}
 
-## 压缩策略
-${compressionStrategy}
+## 压缩强度
+${densityHint}
 
 ## 输出格式：${format.name}
-${format.desc}
-参考示例：${format.example}
+${format.instruction || format.desc}
+
+参考示例（仅参考格式，内容以实际聊天为准）：
+${format.example}
 
 ## 压缩要求
-1. 目标：约${targetTokens} tokens
-2. 宁可保留关键信息也不要遗漏——遗漏比冗余更严重
-3. 必须保留：关键事件、关系变化、情感转折、承诺/约定、角色新发现
-4. 可以省略：寒暄、重复内容、无关紧要的细节
-5. 不要添加原文中没有的信息
-6. 直接输出压缩结果，不要任何前缀或解释`;
+1. 目标：约${targetTokens} tokens（宁可少不可多）
+2. 必须保留：关键事件、关系变化、情感转折、承诺/约定、角色新发现
+3. 必须省略：寒暄、重复内容、纯语气词、无关紧要的细节
+4. 遗漏比冗余更严重——但如果原文没有，绝对不能编造
+5. 直接输出压缩结果，不要任何前缀、后缀、解释`;
 
     try {
         const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
@@ -549,12 +650,15 @@ function updateUIState(settings) {
         const fmtName = FORMAT_OPTIONS[currentFCC.format]?.name || currentFCC.format || '?';
         $('#tokenslim_status').html(`<span class="tokenslim-status-active">✅ FCC 已生成 (${fmtName}, ${currentFCC.chat_length || '?'}条消息)</span>`);
         $('#tokenslim_rebuild_btn, #tokenslim_clear_btn').show();
-        $('#tokenslim_fcc_content').val(currentFCC.content.raw).show();
+
+        // FCC 面板展示
+        $('#tokenslim_fcc_panel').show();
+        $('#tokenslim_fcc_content').text(currentFCC.content.raw);
         $('#tokenslim_fcc_meta').html(
-            `生成于: ${(currentFCC.generated_at || '').split('T')[0]} | ` +
-            `${currentFCC.content.original_token_count} → ${currentFCC.content.token_count} tok | ` +
-            `节省 ${Math.round((1 - currentFCC.content.compression_ratio) * 100)}%`
-        ).show();
+            `📄 ${currentFCC.content.original_token_count} → ${currentFCC.content.token_count} tok | ` +
+            `节省 ${Math.round((1 - currentFCC.content.compression_ratio) * 100)}% | ` +
+            `${(currentFCC.generated_at || '').split('T')[0]}`
+        );
 
         if (currentFCC.patches?.length > 0) {
             $('#tokenslim_patches_list').text(
@@ -567,7 +671,9 @@ function updateUIState(settings) {
         }
     } else {
         $('#tokenslim_status').html('<span class="tokenslim-status-inactive">⬜ FCC 未生成</span>');
-        $('#tokenslim_rebuild_btn, #tokenslim_clear_btn, #tokenslim_fcc_content, #tokenslim_fcc_meta, #tokenslim_patches_list, #tokenslim_fold_patches_btn').hide();
+        $('#tokenslim_rebuild_btn, #tokenslim_clear_btn').hide();
+        $('#tokenslim_fcc_panel').hide();
+        $('#tokenslim_patches_list, #tokenslim_fold_patches_btn').hide();
     }
 
     updateFormatExample();
@@ -577,10 +683,12 @@ function updateFormatExample() {
     const key = $('#tokenslim_format').val() || 'progressive';
     const fmt = FORMAT_OPTIONS[key];
     if (fmt) {
-        const label = fmt.category ? `${fmt.category} · ` : '';
-        $('#tokenslim_format_example').html(
-            `<span style="opacity:0.6;font-style:normal">${label}${fmt.desc}</span>\n${fmt.example}`
+        // 显示策略说明（来自 tooltip）
+        $('#tokenslim_format_desc').html(
+            `<span class="tokenslim-format-label">${fmt.category || ''}</span> ${fmt.tooltip || fmt.desc}`
         );
+        // 显示格式示例
+        $('#tokenslim_format_example').text(fmt.example);
     }
 }
 
@@ -616,7 +724,7 @@ function saveFCC(fcc) {
     if (!key) { console.warn('TokenSlim: 无法保存，角色标识缺失'); return; }
     settings.charData[key] = { fcc };
     saveSettingsDebounced();
-    console.log('TokenSlim: FCC 已保存', key);
+    console.log('TokenSlim: FCC 已保存到 extension_settings', key, `${fcc.content.token_count}tok`);
 }
 
 // ==================== FCC 注入 ====================
