@@ -1,16 +1,10 @@
-# OS files
+# 死代码子模块（index.js 未引用，本地保留参考，不进入插件仓库）
+core/
+fcc/
+cache/
+
+# 通用
+node_modules/
+*.log
 .DS_Store
 Thumbs.db
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Node (if any dev dependencies)
-node_modules/
-
-# Temp files
-*.tmp
-*.log

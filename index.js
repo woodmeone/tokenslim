@@ -13,8 +13,9 @@
  * - 四层记忆模型：固定层(角色卡) / 热数据(最近消息) / 温数据(早期消息压缩) / 冷数据(不注入)
  */
 
-import { extension_settings, saveMetadataDebounced } from '../../../extensions.js';
-import { saveSettingsDebounced, hideChatMessageRange } from '../../../../script.js';
+import { extension_settings } from '../../../extensions.js';
+import { saveSettingsDebounced } from '../../../../script.js';
+import { hideChatMessageRange } from '../../../chats.js';
 
 // ==================== 常量 ====================
 const EXT_KEY = 'tokenslim_fcc';
@@ -34,6 +35,8 @@ const defaultSettings = {
     tokenTarget: 300,
     feynmanCheck: true,
     autoInject: true,
+    retainRecent: 2,          // 每次压缩后保留最近 N 条原文消息（不隐藏）
+    autoThreshold: 3,         // 未压缩消息累积达到 N 条时自动触发增量压缩
     charData: {},
 };
 
@@ -231,7 +234,8 @@ const FORMAT_OPTIONS = {
 };
 
 // ==================== 初始化 ====================
-jQuery(async () => {
+// 入口：manifest.json 的 hooks.activate 指向本函数（SillyTavern 标准扩展入口）
+export async function init() {
     console.log('TokenSlim: 初始化...');
 
     if (!extension_settings[EXT_NAME]) {
@@ -255,18 +259,14 @@ jQuery(async () => {
 
     const ctx = SillyTavern.getContext();
     ctx.eventSource.on(ctx.eventTypes.CHAT_CHANGED, () => {
-        if (settings.autoInject || true) {
-            currentFCC = loadFCC();
-            if (currentFCC && settings.enabled && settings.autoInject) {
-                injectFCC(currentFCC);
-                // 恢复已隐藏的消息索引（页面刷新后 is_system 标记可能丢失，需要重新隐藏）
-                if (currentFCC.hidden_message_indices?.length > 0) {
-                    hideCoveredMessages(currentFCC.covered_messages);
-                }
-            }
-            else if (!settings.autoInject) removeFCC();
-            updateUIState(settings);
+        currentFCC = loadFCC();
+        if (currentFCC && settings.enabled && settings.autoInject) {
+            injectFCC(currentFCC);
+            // 恢复已隐藏的消息（页面刷新后 is_system 标记可能丢失，需要重新标记）
+            restoreHiddenMessages();
         }
+        else if (!settings.autoInject) removeFCC();
+        updateUIState(settings);
     });
 
     ctx.eventSource.on(ctx.eventTypes.GENERATION_AFTER_COMMANDS, () => {
@@ -282,7 +282,7 @@ jQuery(async () => {
     updateUIState(settings);
 
     console.log('TokenSlim: 初始化完成');
-});
+}
 
 // ==================== 获取当前角色 ====================
 function getCharacterKey() {
@@ -373,6 +373,16 @@ function bindUIEvents(settings) {
 
     $('#tokenslim_auto_inject').on('change', function () {
         settings.autoInject = !!$(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('#tokenslim_retain_recent').on('input', function () {
+        settings.retainRecent = parseInt(String($(this).val())) || 2;
+        saveSettingsDebounced();
+    });
+
+    $('#tokenslim_auto_threshold').on('input', function () {
+        settings.autoThreshold = parseInt(String($(this).val())) || 3;
         saveSettingsDebounced();
     });
 
@@ -481,8 +491,8 @@ async function handleGenerateFCC(settings) {
         saveFCC(currentFCC);
         if (settings.enabled && settings.autoInject) injectFCC(currentFCC);
 
-        // 隐藏已被 FCC 覆盖的聊天消息（标记为 is_system，不会进 prompt）
-        await hideCoveredMessages(currentFCC.covered_messages);
+        // 隐藏已被 FCC 覆盖的聊天消息（保留最近 retainRecent 条原文）
+        await hideCoveredMessages(settings);
 
         updateUIState(settings);
         updateCompressionResult(originalTokens, compressedTokens, ratio, selfCheckResult);
@@ -620,8 +630,8 @@ ${compressed}
 // ==================== 清除/补丁 ====================
 function handleClearFCC(settings) {
     // 恢复被隐藏的消息
-    if (currentFCC?.covered_messages) {
-        unhideCoveredMessages(currentFCC.covered_messages);
+    if (currentFCC?.hidden_message_indices?.length) {
+        unhideCoveredMessages();
     }
     removeFCC();
     currentFCC = null;
@@ -698,6 +708,8 @@ function updateUIState(settings) {
     $('#tokenslim_token_target').val(settings.tokenTarget);
     $('#tokenslim_feynman').prop('checked', settings.feynmanCheck);
     $('#tokenslim_auto_inject').prop('checked', settings.autoInject);
+    $('#tokenslim_retain_recent').val(settings.retainRecent);
+    $('#tokenslim_auto_threshold').val(settings.autoThreshold);
 
     if (hasFCC) {
         const fmtName = FORMAT_OPTIONS[currentFCC.format]?.name || currentFCC.format || '?';
@@ -876,48 +888,59 @@ function detectCacheKillers() {
 // 利用 SillyTavern 的 hideChatMessageRange API
 // 将被 FCC 覆盖的消息标记为 is_system=true，使其不出现在 prompt 中
 
-async function hideCoveredMessages(coveredCount) {
-    if (!coveredCount || coveredCount <= 0) return;
+// 未压缩的可见消息 = 非 system 且未被 tokenslim 隐藏的消息（含上次保留的原文 + 新消息）
+function getUncompressedMessages() {
+    const ctx = SillyTavern.getContext();
+    const chat = ctx.chat || [];
+    const hidden = new Set(currentFCC?.hidden_message_indices || []);
+    const list = [];
+    for (let i = 0; i < chat.length; i++) {
+        const m = chat[i];
+        if (m.mes && !m.is_system && !hidden.has(i)) list.push({ idx: i, msg: m });
+    }
+    return list;
+}
+
+// 批量隐藏指定消息（标记 is_system=true），并记录索引到 FCC 便于恢复
+async function hideMessages(indices) {
+    if (!indices?.length) return;
     try {
-        const ctx = SillyTavern.getContext();
-        const chat = ctx.chat;
-        if (!chat || chat.length === 0) return;
-
-        // 找出所有非 system 消息的索引
-        const visibleIndices = [];
-        for (let i = 0; i < chat.length; i++) {
-            if (!chat[i].is_system && chat[i].mes) {
-                visibleIndices.push(i);
-            }
-        }
-
-        // 隐藏前 coveredCount 条可见消息（保留最近的消息不被隐藏）
-        const toHide = visibleIndices.slice(0, Math.min(coveredCount, visibleIndices.length - 2));
-        if (toHide.length === 0) return;
-
-        // 使用 SillyTavern 原生 API 批量隐藏
-        const start = toHide[0];
-        const end = toHide[toHide.length - 1];
+        const start = indices[0];
+        const end = indices[indices.length - 1];
         await hideChatMessageRange(start, end, false);
-        console.log('TokenSlim: 已隐藏消息', start, '→', end, `共${toHide.length}条`);
-
-        // 在 FCC 对象中记录隐藏的消息索引，方便后续恢复
         if (currentFCC) {
-            currentFCC.hidden_message_indices = toHide;
+            currentFCC.hidden_message_indices = Array.from(new Set([...(currentFCC.hidden_message_indices || []), ...indices]));
             saveFCC(currentFCC);
         }
+        console.log('TokenSlim: 已隐藏消息', start, '→', end, `共${indices.length}条`);
     } catch (err) {
         console.warn('TokenSlim: 隐藏消息失败', err);
     }
 }
 
-function unhideCoveredMessages(coveredCountOrIndices) {
-    try {
-        const ctx = SillyTavern.getContext();
-        const chat = ctx.chat;
-        if (!chat || chat.length === 0) return;
+// 压缩后隐藏：隐藏"未压缩消息中除最近 retainRecent 条外"的所有消息
+async function hideCoveredMessages(settings) {
+    const retain = Number(settings.retainRecent) || 0;
+    const uncompressed = getUncompressedMessages();
+    const toHide = uncompressed.slice(0, Math.max(0, uncompressed.length - retain));
+    if (toHide.length === 0) return;
+    await hideMessages(toHide.map(x => x.idx));
+}
 
-        // 如果 FCC 记录了具体的隐藏索引，用索引恢复
+// 页面刷新/切换聊天后恢复隐藏标记（仅重新标记 FCC 记录的索引，不新增）
+async function restoreHiddenMessages() {
+    const indices = currentFCC?.hidden_message_indices;
+    if (!indices?.length) return;
+    try {
+        await hideChatMessageRange(indices[0], indices[indices.length - 1], false);
+    } catch (err) {
+        console.warn('TokenSlim: 恢复隐藏标记失败', err);
+    }
+}
+
+function unhideCoveredMessages() {
+    try {
+        // 用 FCC 记录的隐藏索引精确恢复
         if (currentFCC?.hidden_message_indices?.length > 0) {
             const indices = currentFCC.hidden_message_indices;
             const start = indices[0];
@@ -926,11 +949,8 @@ function unhideCoveredMessages(coveredCountOrIndices) {
             console.log('TokenSlim: 已恢复消息', start, '→', end);
             return;
         }
-
-        // 兜底：恢复所有 is_system 且有 tokenslim 标记的消息
-        // 但由于我们无法标记是哪条消息被 tokenslim 隐藏的，
-        // 所以只能恢复所有被标记为 is_system 的消息（这可能影响用户手动隐藏的消息）
-        // 因此最好依赖 hidden_message_indices
+        // 无索引记录时无法精确恢复，仅提示
+        console.warn('TokenSlim: 无 hidden_message_indices 记录，无法恢复隐藏消息');
     } catch (err) {
         console.warn('TokenSlim: 恢复消息失败', err);
     }
@@ -942,36 +962,24 @@ function unhideCoveredMessages(coveredCountOrIndices) {
 async function autoIncrementalPatch(settings) {
     if (!currentFCC || !settings.enabled) return;
 
-    const ctx = SillyTavern.getContext();
-    const chat = ctx.chat;
-    if (!chat || chat.length === 0) return;
-
-    // 计算当前非 system 消息数
-    const visibleCount = chat.filter(m => m.mes && !m.is_system).length;
-    const coveredAtGeneration = currentFCC.covered_messages || 0;
-
-    // 如果当前可见消息数 > 生成 FCC 时覆盖的消息数 + 已有补丁数，
-    // 说明有新消息需要增量压缩
-    const patchCount = currentFCC.patches?.length || 0;
-    const newMessageCount = visibleCount - (coveredAtGeneration + patchCount);
-
-    // 新增消息超过 3 条时自动生成增量补丁
-    if (newMessageCount < 3) return;
-
     const aiCheck = checkAIAvailable();
     if (!aiCheck.available) return;
 
-    console.log('TokenSlim: 检测到新增消息，生成增量补丁', newMessageCount);
+    const retain = Number(settings.retainRecent) || 0;
+    const threshold = Number(settings.autoThreshold) || 3;
 
-    // 只压缩新增的消息
-    const allVisible = chat.filter(m => m.mes && !m.is_system);
-    const newMessages = allVisible.slice(coveredAtGeneration);
-    const newChatText = newMessages.map(m =>
-        `${m.is_user ? '用户' : (m.name || '角色')}: ${m.mes.trim()}`
+    // 未压缩可见消息 = 上次保留的原文 + 新消息；除最新 retain 条外都待压缩
+    const uncompressed = getUncompressedMessages();
+    const toCompressCount = uncompressed.length - retain;
+    if (toCompressCount < threshold) return;  // 新消息不足阈值，等更多轮次
+
+    const target = uncompressed.slice(0, toCompressCount);
+    const targetText = target.map(({ msg }) =>
+        `${msg.is_user ? '用户' : (msg.name || '角色')}: ${msg.mes.trim()}`
     ).join('\n');
+    if (!targetText.trim()) return;
 
-    if (!newChatText.trim()) return;
-
+    const ctx = SillyTavern.getContext();
     const refContext = getReferenceContext(getCurrentCharacterData());
     const format = FORMAT_OPTIONS[settings.format] || FORMAT_OPTIONS.progressive;
 
@@ -982,8 +990,8 @@ async function autoIncrementalPatch(settings) {
 ## 现有 FCC 摘要
 ${currentFCC.content.raw.substring(0, 1000)}
 
-## 新增聊天记录（${newMessageCount}条）
-${newChatText}
+## 新增聊天记录（${target.length}条）
+${targetText}
 
 ## 输出格式：${format.name}（增量版）
 ${format.instruction || format.desc}
@@ -1000,33 +1008,20 @@ ${format.instruction || format.desc}
             seq: currentFCC.patches.length + 1,
             content: patchContent,
             generated_at: new Date().toISOString(),
-            message_count: newMessageCount,
+            message_count: target.length,
         });
 
-        // 隐藏新增消息（已由增量补丁覆盖）
-        const newVisibleIndices = [];
-        for (let i = 0; i < chat.length; i++) {
-            if (!chat[i].is_system && chat[i].mes && !currentFCC.hidden_message_indices?.includes(i)) {
-                newVisibleIndices.push(i);
-            }
-        }
-        const newToHide = newVisibleIndices.slice(0, newMessageCount);
-        if (newToHide.length > 0) {
-            const start = newToHide[0];
-            const end = newToHide[newToHide.length - 1];
-            await hideChatMessageRange(start, end, false);
-            if (!currentFCC.hidden_message_indices) currentFCC.hidden_message_indices = [];
-            currentFCC.hidden_message_indices.push(...newToHide);
-        }
+        // 隐藏已压缩的消息（保留最近 retain 条原文）
+        await hideMessages(target.map(x => x.idx));
 
         // 更新覆盖消息数
-        currentFCC.covered_messages = (currentFCC.covered_messages || 0) + newMessageCount;
+        currentFCC.covered_messages = (currentFCC.covered_messages || 0) + target.length;
 
         saveFCC(currentFCC);
         if (settings.autoInject) injectFCC(currentFCC);
         updateUIState(settings);
 
-        toastr.success(`增量补丁已生成（${newMessageCount}条新消息）`, 'TokenSlim');
+        toastr.success(`增量补丁已生成（${target.length}条新消息）`, 'TokenSlim');
     } catch (err) {
         console.warn('TokenSlim: 增量补丁生成失败', err);
     }

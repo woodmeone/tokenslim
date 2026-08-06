@@ -1,15 +1,16 @@
-# TokenSlim - SillyTavern 角色卡省 Token 插件
+# TokenSlim - SillyTavern 聊天记录省 Token 插件
 
-通过 **FCC（冻结压缩典籍）** 技术压缩角色卡文本，实现 Token 节省 + 缓存命中率优化。
+通过 **FCC（冻结压缩典籍）** 技术压缩聊天记录，实现 Token 节省 + 缓存命中率优化。
 
 ## 功能
 
-- 🗜️ **5轮压缩管线**：删废话 → 类型化 → 结构化(PList) → 原型锚点 → 一句话总结
-- 🧊 **冻结压缩典籍(FCC)**：生成稳定的压缩内容，作为 prompt 前缀
-- 💾 **缓存命中率优化**：三厂商策略路由（Anthropic/OpenAI/DeepSeek）
-- 🔍 **缓存杀手检测**：5条规则只读检测，健康度评分
-- 📝 **增量补丁**：append-only 更新，不破坏前缀缓存
-- ✅ **Feynman自检**：压缩质量保证，检测关键信息遗漏
+- 🗜️ **17 种压缩策略可选**：精简列表 / PList / EAV / 渐进摘要 / 叙事折叠 / 原型锚点 / 情感栈 / 关系图谱 等
+- 🧊 **冻结压缩典籍(FCC)**：生成的压缩摘要作为稳定前缀注入 prompt，内容冻结不变化
+- ⚡ **手动 / 自动双触发**：随时点"生成 FCC"，或设置"自动压缩阈值"后每隔 N 轮自动压缩
+- 🕳️ **增量补丁**：只压缩新增消息，append-only 追加，不破坏前缀缓存
+- 🙈 **自动隐藏**：被压缩的聊天消息自动隐藏（is_system），不出现在 prompt 中，保留最近 N 条原文
+- 💾 **缓存命中率优化**：三厂商策略路由（Anthropic/OpenAI/DeepSeek）+ 缓存杀手检测
+- ✅ **Feynman 自检**：压缩质量保证，检测关键信息遗漏
 
 ## 安装
 
@@ -19,31 +20,34 @@
 https://github.com/woodmeone/tokenslim
 ```
 
-点击 "Install Extension" 即可。
+点击 "Install Extension" 即可。本地开发也可以直接复制 `tokenslim/` 目录到
+`SillyTavern/public/scripts/extensions/third-party/` 下。
 
 ## 使用
 
-1. 加载角色卡
+1. 加载角色卡，开始聊天
 2. 在扩展设置面板找到 "TokenSlim"
-3. 点击 "⚡ 生成 FCC"
-4. 插件自动注入压缩后的角色信息到 prompt
+3. 点击 "⚡ 生成 FCC" —— 压缩当前聊天记录并注入 prompt
+4. 之后聊天中新增消息累积到阈值，自动生成增量补丁（也可随时手动重建）
 
 ## 配置
 
-| 选项 | 说明 |
-|------|------|
-| 格式 | PList（推荐）/ 精简列表 / W+ / W++ |
-| Token 目标 | 压缩后目标 token 数（默认 150） |
-| 原型锚点 | 识别文化原型，只保留偏离设定 |
-| Feynman 自检 | 检查压缩是否遗漏关键信息 |
-| 自动注入 | 角色卡加载时自动注入 FCC |
+| 选项 | 说明 | 默认 |
+|------|------|------|
+| 压缩策略 | 17 种格式，不确定选"渐进摘要（推荐）" | progressive |
+| 目标 token 数 | 压缩后的大致 token 量（≥1024 更利于缓存命中） | 300 |
+| 保留最近原文条数 | 压缩后保留最近 N 条消息原文不隐藏（0=全部压缩隐藏） | 2 |
+| 自动压缩阈值 | 未压缩新消息累积 N 条时自动触发增量压缩 | 3 |
+| 质量自检 | Feynman 自检，检查关键信息遗漏 | 开 |
+| 自动注入 | 自动把压缩摘要注入 prompt | 开 |
 
 ## 技术原理
 
-- **FCC** 存储在角色卡 `extensions.tokenslim.fcc` 字段
-- 注入位置：`before_char`（position=1）
-- 补丁采用 append-only，不修改冻结部分
-- 使用 `saveMetadataDebounced()` 保存角色卡数据
+- **FCC** 存储在全局设置的 `extension_settings.tokenslim.charData[角色]`，按角色隔离
+- 注入位置：`IN_CHAT`（position=1），depth=9999 —— 世界书之后、聊天记录之前，属于稳定前缀区
+- 压缩摘要 + 增量补丁按压缩顺序拼接注入，作为前缀的一部分 → 每次请求前缀不变 → API 缓存命中 → 计费打折
+- 补丁采用 append-only，不修改冻结部分；可"折叠补丁"合并回主体
+- 隐藏使用 `hideChatMessageRange`（is_system=true），prompt 构建时被过滤
 
 ## 作者
 

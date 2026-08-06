@@ -1,5 +1,5 @@
 {
-    "display_name": "TokenSlim - 角色卡省Token",
+    "display_name": "TokenSlim - 聊天记录省Token",
     "loading_order": 10,
     "requires": [],
     "optional": [],
@@ -11,5 +11,8 @@
     "homePage": "https://github.com/woodmeone/tokenslim",
     "auto_update": true,
     "minimum_client_version": "1.12.0",
-    "description": "通过冻结压缩典籍(FCC)压缩角色卡文本，省token + 缓存命中优化"
+    "description": "通过冻结压缩典籍(FCC)压缩聊天记录，省token + 缓存命中优化",
+    "hooks": {
+        "activate": "init"
+    }
 }
