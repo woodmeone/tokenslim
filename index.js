@@ -236,6 +236,13 @@ const FORMAT_OPTIONS = {
 // ==================== 初始化 ====================
 // 入口：manifest.json 的 hooks.activate 指向本函数（SillyTavern 标准扩展入口）
 export async function init() {
+    // 防双实例：system + local/global 可能同时加载同名扩展，只初始化一次
+    if (window.__tokenslim_initialized) {
+        console.warn('TokenSlim: 检测到重复实例，跳过初始化');
+        return;
+    }
+    window.__tokenslim_initialized = true;
+
     console.log('TokenSlim: 初始化...');
 
     if (!extension_settings[EXT_NAME]) {
@@ -269,7 +276,10 @@ export async function init() {
         updateUIState(settings);
     });
 
-    ctx.eventSource.on(ctx.eventTypes.GENERATION_AFTER_COMMANDS, () => {
+    ctx.eventSource.on(ctx.eventTypes.GENERATION_AFTER_COMMANDS, (type, generateData, dryRun) => {
+        // 关键：过滤 quiet 生成（我们自己的压缩调用）和 dryRun（提示构建），
+        // 否则 quiet 生成完成会再次 emit 本事件 → autoIncrementalPatch 自我触发 → 死循环
+        if (type === 'quiet' || dryRun) return;
         if (settings.enabled && settings.autoInject) {
             ensureFCCInjected();
             // 自动检测是否需要增量补丁
@@ -999,7 +1009,10 @@ function unhideCoveredMessages() {
 
 async function autoIncrementalPatch(settings) {
     if (!currentFCC || !settings.enabled) return;
-
+    // 重入锁：GENERATION_AFTER_COMMANDS 可能被 quiet 生成递归触发，防止并发/递归死循环
+    if (window.__tokenslim_patch_running) return;
+    window.__tokenslim_patch_running = true;
+    try {
     const aiCheck = checkAIAvailable();
     if (!aiCheck.available) return;
 
@@ -1060,7 +1073,10 @@ ${format.instruction || format.desc}
         updateUIState(settings);
 
         toastr.success(`增量补丁已生成（${target.length}条新消息）`, 'TokenSlim');
-    } catch (err) {
-        console.warn('TokenSlim: 增量补丁生成失败', err);
+        } catch (err) {
+            console.warn('TokenSlim: 增量补丁生成失败', err);
+        }
+    } finally {
+        window.__tokenslim_patch_running = false;
     }
 }
