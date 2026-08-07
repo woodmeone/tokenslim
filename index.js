@@ -236,7 +236,19 @@ const FORMAT_OPTIONS = {
 // ==================== 初始化 ====================
 // 入口：manifest.json 的 hooks.activate 指向本函数（SillyTavern 标准扩展入口）
 export async function init() {
-    // 防双实例：system + local/global 可能同时加载同名扩展，只初始化一次
+    // 模块 URL 诊断（区分 system / third-party 安装位置）
+    const moduleUrl = (import.meta && import.meta.url) || '';
+    const isSystemPath = moduleUrl.includes('/extensions/tokenslim/') && !moduleUrl.includes('/third-party/');
+    console.log('TokenSlim: 模块路径', moduleUrl || '(未知)', isSystemPath ? '[system 目录，自我禁用]' : '');
+
+    // 自我禁用：运行在 system 内置扩展目录（public/scripts/extensions/tokenslim）时，
+    // 不是标准安装位置（third-party / data 扩展），跳过初始化，避免与 third-party 版双实例冲突
+    if (isSystemPath) {
+        console.warn('TokenSlim: 检测到运行在 system 扩展目录（非 third-party），已自我禁用。请删除 public/scripts/extensions/tokenslim 目录，改用扩展面板从 GitHub 安装（third-party）。');
+        return;
+    }
+
+    // 防双实例：同名扩展（local + global）可能同时加载，只初始化一次
     if (window.__tokenslim_initialized) {
         console.warn('TokenSlim: 检测到重复实例，跳过初始化');
         return;
