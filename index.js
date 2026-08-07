@@ -790,6 +790,17 @@ function handleCacheCheck() {
     </div>`);
 }
 
+// 清理待压缩文本中的剧本/思考/评估表标签，避免模型模仿剧本格式输出
+function sanitizeForCompression(text) {
+    return String(text)
+        .replace(/<thinking>[\s\S]*?<\/thinking>/g, '')
+        .replace(/<now_plot>\s*/g, '')
+        .replace(/<\/now_plot>/g, '')
+        .replace(/<evaluation_form>[\s\S]*?<\/evaluation_form>/g, '')
+        .replace(/<\/?[a-zA-Z_][a-zA-Z0-9_]*\s*[^>]*>/g, '')  // 兜底：其他 HTML 标签
+        .trim();
+}
+
 // ==================== UI 更新 ====================
 function escapeHtml(text) {
     return String(text)
@@ -1108,7 +1119,7 @@ async function autoIncrementalPatch(settings, force = false) {
         return;
     }
     const targetText = target.map(({ msg }) =>
-        `${msg.is_user ? '用户' : (msg.name || '角色')}: ${msg.mes.trim()}`
+        `${msg.is_user ? '用户' : (msg.name || '角色')}: ${sanitizeForCompression(msg.mes.trim())}`
     ).join('\n');
     if (!targetText.trim()) return;
 
@@ -1157,14 +1168,56 @@ ${format.example}
 3. 必须省略：寒暄、重复内容、纯语气词、场景渲染、道具清单、选项列表
 4. 遗漏比冗余更严重——但如果原文没有，绝对不能编造
 5. 直接输出压缩结果，不要任何前缀、后缀、解释
-6. 你的输出必须比原文短很多！如果输出长度接近原文，说明你做错了`;
+6. 你的输出必须比原文短很多！如果输出长度接近原文，说明你做错了
+7. 输出必须是 JSON 对象：{"summary": "你的压缩摘要"}，不要输出任何其他内容、格式标记或剧本`;
+
+    // jsonSchema 硬约束：强制模型输出 JSON（{summary}），从机制上杜绝输出剧本/标签格式
+    const jsonSchema = {
+        name: 'incremental_summary',
+        strict: true,
+        schema: {
+            type: 'object',
+            properties: {
+                summary: {
+                    type: 'string',
+                    description: '新增聊天记录的压缩摘要，严格按上方输出格式',
+                },
+            },
+            required: ['summary'],
+            additionalProperties: false,
+        },
+    };
 
     try {
         // 完全复用首次 FCC 的方法：完整压缩指令直接作为 quiet_prompt 传入
         // （ST 注入 IN_PROMPT 前部）。实测 IN_CHAT depth=0 末尾注入会被上下文
         // 末尾的剧本消息带偏（模型续写剧本），改为前部指令方式。
-        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: patchPrompt }), 60000, '增量压缩');
-        const patchContent = (result || '').trim();
+        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: patchPrompt, jsonSchema }), 60000, '增量压缩');
+        let patchContent = (result || '').trim();
+        // jsonSchema 模式下返回序列化 JSON，解析提取 summary；非 JSON 则兜底直接用
+        try {
+            const parsed = JSON.parse(patchContent);
+            if (parsed && typeof parsed.summary === 'string') {
+                patchContent = parsed.summary.trim();
+            }
+        } catch {
+            // 模型输出可能不规范（JSON 外加文字/裸换行/未转义字符），尝试提取 {...} 区间再解析
+            const firstBrace = patchContent.indexOf('{');
+            const lastBrace = patchContent.lastIndexOf('}');
+            if (firstBrace >= 0 && lastBrace > firstBrace) {
+                try {
+                    // 把裸换行转义为 \n（JSON 字符串内不允许裸换行）
+                    const jsonCandidate = patchContent.slice(firstBrace, lastBrace + 1)
+                        .replace(/\r\n/g, '\\n')
+                        .replace(/\n/g, '\\n')
+                        .replace(/\r/g, '\\n');
+                    const parsed = JSON.parse(jsonCandidate);
+                    if (parsed && typeof parsed.summary === 'string') {
+                        patchContent = parsed.summary.trim();
+                    }
+                } catch { /* 仍失败则保留原文 */ }
+            }
+        }
         if (!patchContent) return;
 
         if (!currentFCC.patches) currentFCC.patches = [];
