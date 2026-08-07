@@ -1189,10 +1189,21 @@ ${format.example}
     };
 
     try {
-        // 完全复用首次 FCC 的方法：完整压缩指令直接作为 quiet_prompt 传入
-        // （ST 注入 IN_PROMPT 前部）。实测 IN_CHAT depth=0 末尾注入会被上下文
-        // 末尾的剧本消息带偏（模型续写剧本），改为前部指令方式。
-        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: patchPrompt, jsonSchema }), 60000, '增量压缩');
+        // 压缩前临时隐藏待压缩消息：避免同一内容在主上下文（正常聊天记录，含剧本标签）
+        // 与指令内嵌文本中各出现一次——模型看到主上下文末尾的剧本消息会被带偏续写剧本。
+        // 用户实测：单独把提示词丢给 DeepSeek 能按格式压缩，插件不行，差异正是主上下文里的
+        // 剧本重复内容；临时隐藏后主上下文不再含待压缩剧本，只剩指令内嵌的（已清理标签）文本。
+        const targetIdx = target.map(x => x.idx);
+        await hideChatMessageRange(targetIdx[0], targetIdx[targetIdx.length - 1], false);
+        let result;
+        try {
+            // jsonSchema 硬约束：强制模型输出 JSON（{summary}），从机制上杜绝剧本/标签格式
+            result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: patchPrompt, jsonSchema }), 60000, '增量压缩');
+        } catch (err) {
+            // 部分模型/接口不支持 json_schema，降级为普通模式重试，保证补丁被收录
+            console.warn('TokenSlim: jsonSchema 模式失败，降级重试', err.message || err);
+            result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: patchPrompt }), 60000, '增量压缩');
+        }
         let patchContent = (result || '').trim();
         // jsonSchema 模式下返回序列化 JSON，解析提取 summary；非 JSON 则兜底直接用
         try {
@@ -1218,7 +1229,11 @@ ${format.example}
                 } catch { /* 仍失败则保留原文 */ }
             }
         }
-        if (!patchContent) return;
+        if (!patchContent) {
+            // 压缩结果为空：恢复临时隐藏的消息，不收录补丁
+            try { await hideChatMessageRange(targetIdx[0], targetIdx[targetIdx.length - 1], true); } catch (e) { }
+            return;
+        }
 
         if (!currentFCC.patches) currentFCC.patches = [];
         currentFCC.patches.push({
@@ -1242,6 +1257,11 @@ ${format.example}
         toastr.success(`增量补丁已生成（${target.length}条新消息）`, 'TokenSlim');
     } catch (err) {
         console.warn('TokenSlim: 增量补丁生成失败', err);
+        // 生成失败：恢复临时隐藏的消息（不收录补丁，聊天保持原状）
+        try {
+            const targetIdx = target.map(x => x.idx);
+            await hideChatMessageRange(targetIdx[0], targetIdx[targetIdx.length - 1], true);
+        } catch (e) { }
     }
     } finally {
         window.__tokenslim_patch_running = false;
