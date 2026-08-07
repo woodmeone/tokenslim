@@ -288,14 +288,17 @@ export async function init() {
         updateUIState(settings);
     });
 
+    // 延迟防抖：AI 回复完成后稍等再触发增量压缩，避免压缩请求紧贴主生成（混在一起/占用生成锁）
+    let patchDebounce = null;
     ctx.eventSource.on(ctx.eventTypes.GENERATION_AFTER_COMMANDS, (type, generateData, dryRun) => {
         // 关键：过滤 quiet 生成（我们自己的压缩调用）和 dryRun（提示构建），
         // 否则 quiet 生成完成会再次 emit 本事件 → autoIncrementalPatch 自我触发 → 死循环
         if (type === 'quiet' || dryRun) return;
         if (settings.enabled && settings.autoInject) {
             ensureFCCInjected();
-            // 自动检测是否需要增量补丁
-            autoIncrementalPatch(settings);
+            // 3 秒延迟 + 防抖：如果 3 秒内又有新一轮生成，重置计时器
+            clearTimeout(patchDebounce);
+            patchDebounce = setTimeout(() => autoIncrementalPatch(settings), 3000);
         }
     });
 
@@ -417,6 +420,7 @@ function bindUIEvents(settings) {
     $('#tokenslim_generate_btn').on('click', async () => await handleGenerateFCC(settings));
     $('#tokenslim_rebuild_btn').on('click', async () => await handleGenerateFCC(settings));
     $('#tokenslim_clear_btn').on('click', () => handleClearFCC(settings));
+    $('#tokenslim_manual_patch_btn').on('click', () => autoIncrementalPatch(settings, true));
     $('#tokenslim_fold_patches_btn').on('click', async () => await handleFoldPatches(settings));
     $('#tokenslim_cache_check_btn').on('click', () => handleCacheCheck());
 
@@ -812,6 +816,7 @@ function updateUIState(settings) {
         const hiddenCount = currentFCC.hidden_message_indices?.length || currentFCC.covered_messages || 0;
         $('#tokenslim_status').html(`<span class="tokenslim-status-active">✅ FCC 已生成 (${fmtName}, 覆盖${hiddenCount}条消息)</span>`);
         $('#tokenslim_rebuild_btn, #tokenslim_clear_btn').show();
+        $('#tokenslim_manual_patch_btn').show();
 
         // FCC 面板展示
         $('#tokenslim_fcc_panel').show();
@@ -1080,7 +1085,7 @@ async function unhideCoveredMessages() {
 // ==================== 自动增量检测 ====================
 // 当有 FCC 后，检测是否有新的聊天消息需要增量压缩
 
-async function autoIncrementalPatch(settings) {
+async function autoIncrementalPatch(settings, force = false) {
     if (!currentFCC || !settings.enabled) return;
     // 重入锁：GENERATION_AFTER_COMMANDS 可能被 quiet 生成递归触发，防止并发/递归死循环
     if (window.__tokenslim_patch_running) return;
@@ -1095,9 +1100,13 @@ async function autoIncrementalPatch(settings) {
     // 未压缩可见消息 = 上次保留的原文 + 新消息；除最新 retain 条外都待压缩
     const uncompressed = getUncompressedMessages();
     const toCompressCount = uncompressed.length - retain;
-    if (toCompressCount < threshold) return;  // 新消息不足阈值，等更多轮次
-
+    // 自动模式需满足阈值；手动模式（force=true）无视阈值，只要有未压缩消息就压缩
+    if (!force && toCompressCount < threshold) return;  // 新消息不足阈值，等更多轮次
     const target = uncompressed.slice(0, toCompressCount);
+    if (target.length === 0) {
+        if (force) toastr.info('没有新的未压缩消息需要压缩', 'TokenSlim');
+        return;
+    }
     const targetText = target.map(({ msg }) =>
         `${msg.is_user ? '用户' : (msg.name || '角色')}: ${msg.mes.trim()}`
     ).join('\n');
