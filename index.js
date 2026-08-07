@@ -14,7 +14,7 @@
  */
 
 import { extension_settings } from '../../../extensions.js';
-import { saveSettingsDebounced } from '../../../../script.js';
+import { saveSettingsDebounced, printMessages } from '../../../../script.js';
 import { hideChatMessageRange } from '../../../chats.js';
 
 // ==================== 常量 ====================
@@ -693,11 +693,9 @@ ${compressed}
 }
 
 // ==================== 清除/补丁 ====================
-function handleClearFCC(settings) {
-    // 恢复被隐藏的消息
-    if (currentFCC?.hidden_message_indices?.length) {
-        unhideCoveredMessages();
-    }
+async function handleClearFCC(settings) {
+    // 恢复被隐藏的消息（全部，含重渲染）
+    await unhideCoveredMessages();
     removeFCC();
     currentFCC = null;
     const key = getCharacterKey();
@@ -706,7 +704,7 @@ function handleClearFCC(settings) {
         saveSettingsDebounced();
     }
     updateUIState(settings);
-    toastr.info('FCC 已清除，已恢复隐藏的聊天消息', 'TokenSlim');
+    toastr.info('FCC 已清除，已恢复全部隐藏的聊天消息', 'TokenSlim');
 }
 
 async function handleFoldPatches(settings) {
@@ -1011,6 +1009,11 @@ async function hideMessages(indices) {
         const start = indices[0];
         const end = indices[indices.length - 1];
         await hideChatMessageRange(start, end, false);
+        // 给消息打上 tokenslim 标记：清除/恢复时按标记精确找回（不依赖易失的索引）
+        const chat = SillyTavern.getContext().chat || [];
+        for (const idx of indices) {
+            if (chat[idx]) chat[idx].tokenslim_hidden = true;
+        }
         if (currentFCC) {
             currentFCC.hidden_message_indices = Array.from(new Set([...(currentFCC.hidden_message_indices || []), ...indices]));
             saveFCC(currentFCC);
@@ -1041,19 +1044,34 @@ async function restoreHiddenMessages() {
     }
 }
 
-function unhideCoveredMessages() {
+async function unhideCoveredMessages() {
     try {
-        // 用 FCC 记录的隐藏索引精确恢复
-        if (currentFCC?.hidden_message_indices?.length > 0) {
-            const indices = currentFCC.hidden_message_indices;
-            const start = indices[0];
-            const end = indices[indices.length - 1];
-            hideChatMessageRange(start, end, true);  // true = unhide
-            console.log('TokenSlim: 已恢复消息', start, '→', end);
+        const ctx = SillyTavern.getContext();
+        const chat = ctx.chat || [];
+        if (!chat.length) return;
+
+        // 收集所有被 tokenslim 隐藏的消息：
+        // 1) 有 tokenslim_hidden 标记的（新逻辑，最可靠）
+        // 2) 旧数据兜底：hidden_message_indices 记录的
+        const hiddenIndices = new Set(currentFCC?.hidden_message_indices || []);
+        const toRestore = [];
+        for (let i = 0; i < chat.length; i++) {
+            const m = chat[i];
+            if (!m) continue;
+            if (m.tokenslim_hidden || (m.is_system && hiddenIndices.has(i))) {
+                toRestore.push(i);
+                delete m.tokenslim_hidden;
+            }
+        }
+        if (toRestore.length === 0) {
+            console.warn('TokenSlim: 未找到被隐藏的消息');
             return;
         }
-        // 无索引记录时无法精确恢复，仅提示
-        console.warn('TokenSlim: 无 hidden_message_indices 记录，无法恢复隐藏消息');
+        // 恢复 is_system 标记（覆盖最小到最大索引区间，全部恢复）
+        await hideChatMessageRange(toRestore[0], toRestore[toRestore.length - 1], true);
+        // 重新渲染消息：hideChatMessageRange 只改标记不刷新 UI，必须重渲染才会全部显示回来
+        try { await printMessages(); } catch (e) { console.warn('TokenSlim: 消息重渲染失败', e); }
+        console.log('TokenSlim: 已恢复消息', toRestore.length, '条');
     } catch (err) {
         console.warn('TokenSlim: 恢复消息失败', err);
     }
@@ -1125,7 +1143,7 @@ ${format.instruction || format.desc}
 ${format.example}
 
 ## 压缩要求
-1. 目标：约${Math.min(settings.tokenTarget || 300, 150)} tokens（增量补丁应简短，宁可少不可多）
+1. 目标：约${settings.tokenTarget || 300} tokens（与首次压缩一致，宁可少不可多）
 2. 必须保留：关键事件、关系变化、情感转折、承诺/约定、角色新发现
 3. 必须省略：寒暄、重复内容、纯语气词、场景渲染、道具清单、选项列表
 4. 遗漏比冗余更严重——但如果原文没有，绝对不能编造
