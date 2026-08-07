@@ -1078,8 +1078,13 @@ ${format.example}
 4. 必须省略：场景渲染、细节描写、对话原文、道具清单原文、选项列表
 5. 你的输出必须远短于输入，如果接近原文长度说明你做错了`;
 
+    const instrKey = 'tokenslim_compress_instr';
     try {
-        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: patchPrompt }), 60000, '增量压缩');
+        // 注入完整压缩指令到上下文末尾（IN_CHAT depth=0，U 型注意力最强位置；
+        // 模型同时能看到主上下文中的 FCC 摘要/角色卡/新增聊天记录）
+        ctx.setExtensionPrompt(instrKey, patchPrompt, 1, 0, false, 0);
+        // quiet 引导：ST 要求 quiet_prompt 非空才注入（script.js:4973），完整指令已在末尾
+        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: '请根据上下文末尾 [TokenSlim] 压缩指令的要求，输出新增聊天记录的压缩摘要。' }), 60000, '增量压缩');
         const patchContent = (result || '').trim();
         if (!patchContent) return;
 
@@ -1102,9 +1107,12 @@ ${format.example}
         updateUIState(settings);
 
         toastr.success(`增量补丁已生成（${target.length}条新消息）`, 'TokenSlim');
-        } catch (err) {
-            console.warn('TokenSlim: 增量补丁生成失败', err);
-        }
+    } catch (err) {
+        console.warn('TokenSlim: 增量补丁生成失败', err);
+    } finally {
+        // 清理上下文末尾注入的压缩指令
+        try { ctx.setExtensionPrompt(instrKey, '', 1, 0, false, 0); } catch (e) { }
+    }
     } finally {
         window.__tokenslim_patch_running = false;
     }
