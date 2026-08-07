@@ -309,10 +309,16 @@ function getCurrentCharacterData() {
 function checkAIAvailable() {
     const ctx = SillyTavern.getContext();
     const api = ctx.mainApi;
-    if (!api || api === 'undefined') {
+    const status = ctx.onlineStatus;
+    // mainApi 总有默认值（如 koboldhorde），不能作为"已配置"的依据
+    if (!api || api === 'undefined' || api === 'no_connection') {
         return { available: false, reason: '请先在 SillyTavern 的 API 设置中配置 AI 连接，TokenSlim 会复用该连接进行压缩。' };
     }
-    return { available: true, api };
+    // online_status === 'no_connection' 表示连接失败/未连接
+    if (!status || status === 'no_connection') {
+        return { available: false, reason: `当前 AI 连接（${api}）尚未就绪。请先在"API 连接"面板测试连接成功后再压缩。` };
+    }
+    return { available: true, api, status };
 }
 
 // ==================== 文本收集 ====================
@@ -444,12 +450,22 @@ async function handleGenerateFCC(settings) {
         // 核心压缩
         let compressed = await compressChat(chatText, refContext, settings);
 
+        // 空结果保护：AI 未返回任何内容（未连接 API / 生成失败 / 模型拒绝），立即中止，绝不继续
+        if (!compressed || !compressed.trim()) {
+            throw new Error('压缩结果为空：AI 未返回任何内容。请确认已在"API 连接"面板配置并测试连接成功，再重试。');
+        }
+
         // 压缩质量验证：如果压缩后超过原文本的80%，视为压缩失败
         let compressedTokens = await countTokens(compressed);
         if (originalTokens > 0 && compressedTokens > originalTokens * 0.8) {
             console.warn('TokenSlim: 压缩比过低，尝试二次压缩', `${compressedTokens}/${originalTokens}`);
             // 二次压缩：用更简单的提示词重试
+            const firstPass = compressed;
             compressed = await compressChat(chatText, refContext, settings, true);
+            // 二次压缩空结果保护：回退到第一次的结果，绝不生成空 FCC
+            if (!compressed || !compressed.trim()) {
+                compressed = firstPass;
+            }
             compressedTokens = await countTokens(compressed);
         }
 
@@ -511,6 +527,23 @@ async function handleGenerateFCC(settings) {
     }
 }
 
+// ==================== AI 调用超时保护 ====================
+// 给 generateQuietPrompt / getTokenCountAsync 加超时：
+// API 连接假死或请求挂起时不会永久卡住界面，超时抛错并降级/中止
+async function withTimeout(promise, ms, label) {
+    let timer;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error(`${label}超时（${Math.round(ms / 1000)}s），请检查 API 连接`)), ms);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 // ==================== 核心压缩（单轮高质量压缩） ====================
 async function compressChat(chatText, refContext, settings, isRetry = false) {
     const ctx = SillyTavern.getContext();
@@ -569,10 +602,10 @@ ${format.example}
 6. 你的输出必须比原文短很多！如果输出长度接近原文，说明你做错了`;
 
     try {
-        const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: prompt }), 60000, '压缩调用');
         return (result || '').trim();
     } catch (err) {
-        console.warn('TokenSlim: 压缩失败', err);
+        console.warn('TokenSlim: 压缩失败', err.message || err);
         return '';
     }
 }
@@ -616,14 +649,18 @@ ${compressed}
 如果压缩结果已包含所有关键信息，回复"无关键遗漏"。
 否则，用一句话列出遗漏的关键信息（如"遗漏了：角色承诺明天见面"）。`;
 
-        const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: prompt }), 60000, '质量自检');
         const gaps = (result || '').trim();
+        // 空结果不评分（避免误导性高分），标记自检未完成
+        if (!gaps) {
+            return { gaps: '', quality_score: -1, skipped: true };
+        }
         const score = gaps.includes('无关键遗漏') || gaps.includes('没有遗漏') ? 95 :
                       gaps.split('\n').filter(l => l.trim()).length <= 1 ? 80 : 50;
         return { gaps, quality_score: score };
     } catch (err) {
-        console.warn('TokenSlim: 自检失败', err);
-        return { gaps: '', quality_score: -1 };
+        console.warn('TokenSlim: 自检失败', err.message || err);
+        return { gaps: '', quality_score: -1, error: err.message };
     }
 }
 
@@ -827,8 +864,9 @@ function ensureFCCInjected() {
 async function countTokens(text, padding = 0) {
     try {
         const ctx = SillyTavern.getContext();
-        return await ctx.getTokenCountAsync(text, padding);
-    } catch {
+        return await withTimeout(ctx.getTokenCountAsync(text, padding), 10000, 'Token 计数');
+    } catch (err) {
+        console.warn('TokenSlim: Token 计数失败，使用本地估算', err.message || err);
         const cn = (text.match(/[\u4e00-\u9fff]/g) || []).length;
         const en = text.length - cn;
         return Math.ceil(cn / 2 + en / 4) + padding;
@@ -999,7 +1037,7 @@ ${format.instruction || format.desc}
 只压缩新增内容，2-3句话或5-10个要点即可。禁止续写，禁止编造。`;
 
     try {
-        const result = await ctx.generateQuietPrompt({ quietPrompt: patchPrompt });
+        const result = await withTimeout(ctx.generateQuietPrompt({ quietPrompt: patchPrompt }), 60000, '增量压缩');
         const patchContent = (result || '').trim();
         if (!patchContent) return;
 
