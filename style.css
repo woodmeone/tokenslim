@@ -208,3 +208,41 @@
     border-radius: 3px;
     color: var(--SmartThemeBodyColor);
 }
+
+/* 补丁列表（可交互） */
+.tokenslim-patches {
+    max-height: 220px;
+    overflow-y: auto;
+    background: var(--black50, rgba(0, 0, 0, 0.3));
+    border-radius: 6px;
+    padding: 6px;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.tokenslim-patch-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 4px 6px;
+    border-bottom: 1px dashed rgba(128, 128, 128, 0.25);
+}
+.tokenslim-patch-item:last-child {
+    border-bottom: none;
+}
+.tokenslim-patch-head {
+    flex-shrink: 0;
+    font-weight: bold;
+    color: var(--SmartThemeQuoteColor, #c7a44e);
+    white-space: nowrap;
+}
+.tokenslim-patch-content {
+    flex: 1;
+}
+.tokenslim-patch-delete {
+    flex-shrink: 0;
+    padding: 0 8px;
+    font-size: 13px;
+    line-height: 22px;
+}
