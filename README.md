@@ -14,14 +14,13 @@
 
 ## 安装
 
-在 SillyTavern 扩展面板中粘贴此仓库链接，并填写分支名：
+在 SillyTavern 扩展面板中粘贴此仓库链接（默认 main 分支）：
 
 ```
-仓库 URL：https://github.com/woodmeone/tokenslim.git
-分支：feature/tokenslim-mvp
+https://github.com/woodmeone/tokenslim.git
 ```
 
-点击 "Install Extension" 即可（SillyTavern 会用 `git clone -b feature/tokenslim-mvp` 安装）。
+点击 "Install Extension" 即可（SillyTavern 会 `git clone` 默认分支安装）。
 
 本地开发也可以直接复制 `tokenslim/` 目录到
 `SillyTavern/public/scripts/extensions/third-party/` 下（注意：手动复制方式下
